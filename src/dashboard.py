@@ -6,7 +6,8 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from data_loader import DAY_JA, load_media_data, load_profile_data, merge_follower_at_post_date
+from data_loader import (DAY_JA, load_media_data, load_profile_data,
+                         merge_follower_at_post_date)
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "result")
 
@@ -76,7 +77,7 @@ else:
     df_f = df_media.copy()
 
 # -------- ページタイトル --------
-st.title("🎨 かえでさんの Instagram 分析")
+st.title("🎨 Instagram 分析")
 if not df_profile.empty:
     latest_date = df_profile["date"].iloc[-1].strftime("%Y年%m月%d日")
     st.caption(f"最終更新: {latest_date}　|　総投稿数: {len(df_media):,}件")
