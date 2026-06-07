@@ -51,6 +51,100 @@ def load_media_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     return df
 
 
+def _normalize_media_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    メディアCSVの共通整形（JST変換・型変換・派生列）。
+    load_media_data と同じロジックを競合/ハッシュタグにも適用する。
+    """
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.dropna(subset=["timestamp"]).reset_index(drop=True)
+    df["like_count"] = pd.to_numeric(df["like_count"], errors="coerce").fillna(0).astype(int)
+    df["comments_count"] = pd.to_numeric(df["comments_count"], errors="coerce").fillna(0).astype(int)
+    df["timestamp_jst"] = df["timestamp"] + pd.Timedelta(hours=9)
+    df["post_date"] = df["timestamp_jst"].dt.normalize()
+    df["hour"] = df["timestamp_jst"].dt.hour
+    df["weekday"] = df["timestamp_jst"].dt.weekday
+    df["day_name"] = df["weekday"].map(lambda x: DAY_JA[x])
+    return df
+
+
+def load_competitor_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
+    """
+    result/competitors/ 内の各競合の最新メディアCSVを読み込み、1つに結合して返す。
+    competitor 列に元のユーザー名（ファイル名の username 部分）を付与する。
+    """
+    comp_dir = os.path.join(result_dir, "competitors")
+    files = sorted(glob.glob(os.path.join(comp_dir, "*.csv")))
+    files = [f for f in files if "-profile-" not in os.path.basename(f)]
+    if not files:
+        return pd.DataFrame()
+
+    # username ごとに最新ファイル（日付が新しいもの）を選ぶ
+    latest_by_user: dict = {}
+    for f in files:
+        name = os.path.basename(f)
+        m = re.match(r"(.+)_(\d{4}-\d{2}-\d{2})\.csv$", name)
+        if not m:
+            continue
+        username, date = m.group(1), m.group(2)
+        if username not in latest_by_user or date > latest_by_user[username][1]:
+            latest_by_user[username] = (f, date)
+
+    frames = []
+    for username, (f, _date) in latest_by_user.items():
+        try:
+            df = pd.read_csv(f, index_col=0)
+            if df.empty:
+                continue
+            df = _normalize_media_df(df)
+            df["competitor"] = username
+            frames.append(df)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def load_hashtag_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
+    """
+    result/hashtags/ 内の各タグの最新CSVを読み込み、1つに結合して返す。
+    search_hashtag 列に検索したタグ名が入る。
+    """
+    tag_dir = os.path.join(result_dir, "hashtags")
+    files = sorted(glob.glob(os.path.join(tag_dir, "*.csv")))
+    if not files:
+        return pd.DataFrame()
+
+    latest_by_tag: dict = {}
+    for f in files:
+        name = os.path.basename(f)
+        m = re.match(r"(.+)_(\d{4}-\d{2}-\d{2})\.csv$", name)
+        if not m:
+            continue
+        tag, date = m.group(1), m.group(2)
+        if tag not in latest_by_tag or date > latest_by_tag[tag][1]:
+            latest_by_tag[tag] = (f, date)
+
+    frames = []
+    for tag, (f, _date) in latest_by_tag.items():
+        try:
+            df = pd.read_csv(f, index_col=0)
+            if df.empty:
+                continue
+            df = _normalize_media_df(df)
+            if "search_hashtag" not in df.columns:
+                df["search_hashtag"] = tag
+            frames.append(df)
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
 def merge_follower_at_post_date(df_media: pd.DataFrame, df_profile: pd.DataFrame) -> pd.DataFrame:
     if df_profile.empty or df_media.empty:
         df_media["followers_at_post"] = None

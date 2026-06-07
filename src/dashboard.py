@@ -6,8 +6,10 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from data_loader import (DAY_JA, load_media_data, load_profile_data,
+from data_loader import (DAY_JA, load_competitor_data, load_hashtag_data,
+                         load_media_data, load_profile_data,
                          merge_follower_at_post_date)
+from insights import build_summary
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "result")
 
@@ -40,10 +42,12 @@ def load_all_data():
     df_media = load_media_data(RESULT_DIR)
     if not df_media.empty and not df_profile.empty:
         df_media = merge_follower_at_post_date(df_media, df_profile)
-    return df_profile, df_media
+    df_competitors = load_competitor_data(RESULT_DIR)
+    df_hashtags = load_hashtag_data(RESULT_DIR)
+    return df_profile, df_media, df_competitors, df_hashtags
 
 
-df_profile, df_media = load_all_data()
+df_profile, df_media, df_competitors, df_hashtags = load_all_data()
 
 # -------- サイドバー --------
 with st.sidebar:
@@ -199,17 +203,27 @@ if not df_f.empty:
         if "engagement_rate" in df_f.columns:
             df_scatter = df_f.copy()
             df_scatter["type_ja"] = df_scatter["media_type"].map(MEDIA_TYPE_JA).fillna(df_scatter["media_type"])
-            df_scatter["size_val"] = (df_scatter["like_count"] + 1).clip(upper=500)
+            # 縦軸: エンゲージメント数（いいね＋コメント）
+            df_scatter["engagement_count"] = df_scatter["like_count"] + df_scatter["comments_count"]
+            # バブルの大きさ: エンゲージメント率（負・NaNは0に）
+            df_scatter["size_val"] = df_scatter["engagement_rate"].fillna(0).clip(lower=0)
             fig2 = px.scatter(
                 df_scatter,
                 x="timestamp_jst",
-                y="engagement_rate",
+                y="engagement_count",
                 color="type_ja",
                 size="size_val",
                 size_max=25,
-                hover_data={"like_count": True, "comments_count": True, "size_val": False, "type_ja": False},
+                hover_data={
+                    "like_count": True,
+                    "comments_count": True,
+                    "engagement_rate": True,
+                    "size_val": False,
+                    "type_ja": False,
+                },
                 labels={
                     "timestamp_jst": "投稿日時",
+                    "engagement_count": "エンゲージメント数（いいね＋コメント）",
                     "engagement_rate": "エンゲージメント率 (%)",
                     "type_ja": "タイプ",
                     "like_count": "いいね数",
@@ -219,7 +233,7 @@ if not df_f.empty:
             )
             fig2.update_layout(plot_bgcolor="white", yaxis=dict(gridcolor="#f5f5f5"), margin=dict(l=0, r=0, t=10, b=0))
             st.plotly_chart(fig2, use_container_width=True)
-            st.caption("円の大きさ = いいね数")
+            st.caption("縦軸 = エンゲージメント数（いいね＋コメント）　円の大きさ = エンゲージメント率")
         else:
             st.info("エンゲージメント率データがありません")
 
@@ -333,3 +347,213 @@ if not df_f.empty and "hashtag" in df_f.columns:
             st.plotly_chart(fig7, use_container_width=True)
     else:
         st.info("ハッシュタグデータがありません")
+
+st.divider()
+
+# -------- Section 5: 投稿提案 --------
+st.subheader("💡 投稿提案")
+
+PRED_COLOR = {"高": "#E1306C", "中": "#F56040", "低": "#9e9e9e"}
+
+# 「伸びる条件」は全期間データから算出（フィルタの影響を受けない）
+summary = build_summary(df_media, df_competitors, df_hashtags)
+
+# 📋 次にやるべきこと（統計から自動生成・無料）
+st.markdown("##### 📋 次にやるべきこと")
+advice = summary.get("advice", [])
+if advice:
+    with st.container(border=True):
+        for a in advice:
+            st.markdown(f"- {a}")
+    st.caption("※ すべて過去データの数値根拠にもとづく提案です（AI不使用・無料）")
+else:
+    st.info("データが貯まるとここに具体的な提案が表示されます")
+
+st.markdown("##### 📌 データから見た「伸びる条件」")
+sc1, sc2, sc3 = st.columns(3)
+
+with sc1:
+    if summary["best_slots"]:
+        s = summary["best_slots"][0]
+        st.metric("⏰ 反応が良い投稿タイミング", f"{s['day_name']}曜 {s['hour']}時台")
+        others = "　".join(
+            f"{x['day_name']}曜{x['hour']}時" for x in summary["best_slots"][1:3]
+        )
+        if others:
+            st.caption(f"次点: {others}")
+    else:
+        st.metric("⏰ 反応が良い投稿タイミング", "—")
+
+with sc2:
+    if summary["best_types"]:
+        t = summary["best_types"][0]
+        st.metric("📸 伸びる投稿タイプ", t["type_ja"])
+        st.caption(f"平均いいね {t['avg_like']}（{t['count']}件）")
+    else:
+        st.metric("📸 伸びる投稿タイプ", "—")
+
+with sc3:
+    if summary["top_hashtags"]:
+        tags = "　".join(f"#{h['hashtag']}" for h in summary["top_hashtags"][:5])
+        st.metric("🔖 効くハッシュタグ", f"{len(summary['top_hashtags'])}個")
+        st.caption(tags)
+    else:
+        st.metric("🔖 効くハッシュタグ", "—")
+
+if summary["trending_topics"]:
+    trend_tags = "　".join(
+        f"#{t['hashtag']}" for t in summary["trending_topics"][:10]
+    )
+    st.markdown(f"**🌐 業界トレンド（競合・人気タグ投稿で多用）**\n\n{trend_tags}")
+else:
+    st.caption(
+        "💡 競合・ハッシュタグのトレンドデータを集めると、より精度の高い提案ができます"
+        "（`python src/collect_competitors.py` / `python src/collect_hashtags.py`）"
+    )
+
+# 📐 投稿の型（キャプション長・タグ数・投稿ペース）
+st.markdown("##### 📐 伸びる投稿の「型」")
+cl = summary.get("caption_length") or {}
+hc = summary.get("hashtag_count") or {}
+cad = summary.get("cadence") or {}
+
+tc1, tc2, tc3 = st.columns(3)
+with tc1:
+    if cl:
+        st.metric("✍️ 伸びるキャプション長", cl.get("best_band", "—"))
+        st.caption(f"今の平均: {cl.get('current_avg', '—')}字")
+    else:
+        st.metric("✍️ 伸びるキャプション長", "—")
+with tc2:
+    if hc:
+        st.metric("🔢 伸びるハッシュタグ数", hc.get("best_actionable_band", "—"))
+        st.caption(f"今の平均: {hc.get('current_avg', '—')}個")
+    else:
+        st.metric("🔢 伸びるハッシュタグ数", "—")
+with tc3:
+    if cad:
+        st.metric("🗓️ 最近の投稿ペース", f"週 {cad.get('recent_per_week', '—')}件")
+        trend = cad.get("trend", "")
+        prev = cad.get("older_per_week")
+        st.caption(f"傾向: {trend}" + (f"（以前は週{prev}件）" if prev else ""))
+    else:
+        st.metric("🗓️ 最近の投稿ペース", "—")
+
+detail_l, detail_r = st.columns(2)
+with detail_l:
+    if cl.get("ranking"):
+        dfc = pd.DataFrame(cl["ranking"])
+        fig_cl = px.bar(
+            dfc, x="band", y="avg",
+            labels={"band": "キャプション長", "avg": "平均エンゲージ"},
+            title="キャプション長 × 反応",
+        )
+        fig_cl.update_traces(marker_color="#833AB4")
+        fig_cl.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0), height=300)
+        st.plotly_chart(fig_cl, use_container_width=True)
+with detail_r:
+    if hc.get("ranking"):
+        dfh = pd.DataFrame(hc["ranking"])
+        fig_hc = px.bar(
+            dfh, x="band", y="avg",
+            labels={"band": "ハッシュタグ数", "avg": "平均エンゲージ"},
+            title="ハッシュタグ数 × 反応",
+        )
+        fig_hc.update_traces(marker_color="#E1306C")
+        fig_hc.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0), height=300)
+        st.plotly_chart(fig_hc, use_container_width=True)
+
+# ⚠️ 避けたい条件
+low = summary.get("low_performers") or {}
+if low.get("worst_slots") or low.get("worst_type"):
+    with st.expander("⚠️ 避けたい条件（反応が低かったパターン）"):
+        if low.get("worst_type"):
+            wt = low["worst_type"]
+            st.markdown(
+                f"- 最も伸びにくいタイプ: **{wt['type_ja']}**"
+                f"（平均いいね{wt['avg_like']} / {wt['count']}件）"
+            )
+        for s in low.get("worst_slots", []):
+            st.markdown(
+                f"- {s['day_name']}曜 {s['hour']}時台 は反応が低め"
+                f"（平均{s['avg']} / {s['count']}件）"
+            )
+        st.caption("※ 件数が少ない時間帯は参考程度に")
+
+# 🔍 競合から学ぶ
+gap = summary.get("competitor_gap") or {}
+if gap:
+    st.markdown("##### 🔍 競合から学ぶ")
+    gc1, gc2 = st.columns([1, 2])
+    with gc1:
+        my = gap.get("my_avg_like")
+        comp = gap.get("competitor_avg_like")
+        if my is not None and comp is not None:
+            st.metric("平均いいね（妻 / 競合）", f"{my} / {comp}")
+            st.caption(f"競合 {gap.get('competitor_count', 0)} アカウントとの比較")
+    with gc2:
+        tags = gap.get("unused_popular_tags", [])
+        if tags:
+            st.markdown("**競合がよく使うが未使用のタグ（試す価値あり）**")
+            st.markdown("　".join(f"#{t['hashtag']}（{t['count']}回）" for t in tags))
+        else:
+            st.caption("未使用の人気タグは見つかりませんでした")
+else:
+    st.caption(
+        "🔍 競合データを集めると「競合がよく使うが自分が未使用のタグ」も分かります"
+        "（`python src/collect_competitors.py`）"
+    )
+
+st.markdown("##### 🤖 AIによる次の投稿アイデア")
+st.caption("過去データと最新トレンドをもとに、Claudeが具体的な投稿案を作ります。")
+
+gen_col, info_col = st.columns([1, 3])
+with gen_col:
+    do_generate = st.button("✨ 投稿案を作ってもらう", type="primary", use_container_width=True)
+with info_col:
+    regen = st.checkbox("最新で作り直す（再生成）", value=False)
+    st.caption("※ 生成1回ごとにClaude API課金が発生します（同日はキャッシュ利用）")
+
+if do_generate:
+    from suggest import MissingAPIKeyError, generate_suggestions
+
+    try:
+        with st.spinner("Claudeが投稿案を考えています…（30秒ほど）"):
+            st.session_state["suggestions"] = generate_suggestions(force=regen)
+    except MissingAPIKeyError:
+        st.error(
+            "ANTHROPIC_API_KEY が設定されていません。`.env` に追加してから再度お試しください。"
+        )
+    except ImportError:
+        st.error(
+            "anthropic パッケージが未インストールです。"
+            "`pip install -r requirements.txt` を実行してください。"
+        )
+    except Exception as e:  # noqa: BLE001 - ユーザーに原因を見せる
+        st.error(f"生成中にエラーが発生しました: {e}")
+
+result = st.session_state.get("suggestions")
+if result:
+    st.caption(f"生成日時: {result.get('generated_at', '—')}　|　モデル: {result.get('model', '—')}")
+    suggestions = result.get("suggestions", [])
+    for i, sug in enumerate(suggestions, 1):
+        color = PRED_COLOR.get(sug.get("predicted_level", "中"), "#F56040")
+        with st.container(border=True):
+            head_l, head_r = st.columns([4, 1])
+            with head_l:
+                st.markdown(f"**案{i}: {sug.get('theme', '')}**")
+            with head_r:
+                st.markdown(
+                    f"<span style='color:{color};font-weight:700'>"
+                    f"予測 {sug.get('predicted_level', '—')}</span>",
+                    unsafe_allow_html=True,
+                )
+            st.markdown(sug.get("caption_draft", ""))
+            tags = sug.get("hashtags", []) or []
+            if tags:
+                st.caption("　".join(f"#{t.lstrip('#')}" for t in tags))
+            st.caption(
+                f"📸 {sug.get('media_type', '—')}　⏰ {sug.get('best_time', '—')}"
+            )
+            with st.expander("なぜ伸びそう？"):
+                st.write(sug.get("rationale", ""))

@@ -2,9 +2,7 @@
 import json
 import os
 import re
-import sys
 from datetime import datetime as dt
-from pprint import pprint
 
 import pandas as pd
 import requests
@@ -30,6 +28,41 @@ def main():
     # 今日の日付を取得　文字列で年-月-日の型式にする
     today = dt.now().strftime("%Y-%m-%d")
 
+    path = os.path.join(base_dir, "result")
+    collect_account(version, ig_user_id, user_id, access_token, today, path)
+
+
+def collect_account(
+    version: str,
+    ig_user_id: str,
+    user_id: str,
+    access_token: str,
+    today: str,
+    out_dir: str,
+) -> bool:
+    """
+    指定した1アカウントのプロフィール情報・投稿一覧を取得し、CSVに保存する。
+
+    Parameters
+    ----------
+    version : str
+        APIのバージョン番号（例: 'v22.0'）
+    ig_user_id : str
+        自分のInstagramビジネスアカウントのユーザーID
+    user_id : str
+        取得対象のInstagramユーザー名
+    access_token : str
+        Facebook Graph APIのアクセストークン
+    today : str
+        日付文字列（例: '2026-06-07'）。ファイル名に使用。
+    out_dir : str
+        CSVの保存先ディレクトリ
+
+    Returns
+    -------
+    bool
+        収集に成功したら True、API制限などで失敗したら False
+    """
     # ユーザーIDを使ってビジネスディスカバリー情報の取得
     account_dict = call_business_profile(version, ig_user_id, user_id, access_token)
 
@@ -41,10 +74,19 @@ def main():
                 "現在時刻 : ",
                 dt.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
-            print("プログラムを終了します。")
-            sys.exit()
+            print(f"{user_id} の収集をスキップします。")
+            return False
     except Exception:
         pass
+
+    # error キーがあるがコード4以外（ユーザー名誤り・非公開など）の場合もスキップ
+    if "business_discovery" not in account_dict and "media.data" not in str(
+        account_dict
+    ):
+        if "error" in account_dict:
+            print(f"{user_id} の取得に失敗しました: {account_dict['error']}")
+            return False
+
     # 取得した情報をjson_normalizeで一気にデータフレーム型式に変換
     df_profile = pd.json_normalize(account_dict)
     original_columns = list(df_profile.columns)
@@ -58,9 +100,8 @@ def main():
 
     # 重複したカラム名があるとデータポータルで読み込めないため、重複しているカラム名idの左側のほうを残して右側は削除
     df_profile = df_profile.loc[:, ~df_profile.columns.duplicated()]
-    path = os.path.join(base_dir, "result")
-    make_result_dirs(path)
-    df_profile.to_csv(f"{path}/{user_id}-profile-{today}.csv")
+    make_result_dirs(out_dir)
+    df_profile.to_csv(f"{out_dir}/{user_id}-profile-{today}.csv")
 
     # メディア情報の取り出し
     media_data = df_profile["media.data"][0]
@@ -92,7 +133,9 @@ def main():
         print("after_keyがありませんでした。")
         df = make_df(media_data=media_data, data_dict=data_dict)
 
-    df.to_csv(f"{path}/{user_id}_{today}.csv")
+    df.to_csv(f"{out_dir}/{user_id}_{today}.csv")
+    print(f"{user_id} の収集が完了しました。")
+    return True
 
 
 def make_result_dirs(path):
