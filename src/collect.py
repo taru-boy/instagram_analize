@@ -123,6 +123,7 @@ def make_dict() -> dict:
 
     # データフレームにするカラム名をキーとして、空のリストで初期化
     key_list = [
+        "id",
         "media_type",
         "media_url",
         "caption",
@@ -130,7 +131,6 @@ def make_dict() -> dict:
         "timestamp",
         "like_count",
         "comments_count",
-        # "id",
     ]
     for key in key_list:
         data_dict[key] = []
@@ -162,7 +162,7 @@ def call_business_profile(
     """
 
     # ビジネスディスカバリーのエンドポイントの設定　"https://graph.facebook.com/v9/ig_user_id?fields=business_discovery.username(user_id)){followers_count,media_count,media{comments_count,like_count}}&access_token={access-token}"
-    business_api = f"https://graph.facebook.com/{version}/{ig_user_id}?fields=business_discovery.username({user_id}){{username, website, name, id, profile_picture_url, biography, follows_count, followers_count, media_count, media{{timestamp, like_count, comments_count, caption, media_type, media_url, thumbnail_url, video_url}}}}&access_token={access_token}"
+    business_api = f"https://graph.facebook.com/{version}/{ig_user_id}?fields=business_discovery.username({user_id}){{username, website, name, id, profile_picture_url, biography, follows_count, followers_count, media_count, media{{id, timestamp, like_count, comments_count, caption, media_type, media_url, thumbnail_url, video_url}}}}&access_token={access_token}"
 
     # GETリクエスト
     r = requests.get(business_api)
@@ -225,7 +225,7 @@ def pagenate(
         指定されたInstagramアカウントのページ送り後の辞書
     """
     # ビジネスディスカバリーのページ送りのエンドポイントの設定　"https://graph.facebook.com/v9/ig_user_id?fields=business_discovery.username(user_id)){media.after(after_key).limit(number)followers_count,media_count,media{comments_count,like_count}}&access_token=access-token"
-    api_pagenation = f"https://graph.facebook.com/{version}/{ig_user_id}?fields=business_discovery.username({user_id}){{media.after({after_key}).limit(1000){{timestamp, like_count, comments_count, caption, media_type, media_url, thumbnail_url,video_url}}}}&access_token={access_token}"
+    api_pagenation = f"https://graph.facebook.com/{version}/{ig_user_id}?fields=business_discovery.username({user_id}){{media.after({after_key}).limit(1000){{id, timestamp, like_count, comments_count, caption, media_type, media_url, thumbnail_url, video_url}}}}&access_token={access_token}"
     # GETリクエスト
     r = requests.get(api_pagenation)
 
@@ -272,7 +272,9 @@ def make_df(media_data: list, data_dict: dict) -> pd.DataFrame:
         timestamp = media["timestamp"].replace("+0000", "").replace("T", " ")
         like_count = media.get("like_count", None)
         comments_count = media.get("comments_count", None)
+        media_id = media.get("id", None)
         # data_dictの各リストにappendで要素を入れていく
+        data_dict["id"].append(media_id)
         data_dict["media_type"].append(media_type)
         data_dict["media_url"].append(media_url)
         data_dict["caption"].append(caption)
