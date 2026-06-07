@@ -16,16 +16,16 @@ def main():
     メイン関数
     """
 
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
     # .envファイルからトークン情報などの取得
-    load_dotenv()
+    load_dotenv(dotenv_path=os.path.join(base_dir, ".env"))
 
     # os.environ.getまたはos.getenvを使用してenvファイルからトークン情報の読み込み
     access_token = os.getenv("ACCESS_TOKEN")
     version = os.getenv("VERSION")
     ig_user_id = os.getenv("IG_USER_ID")
-
-    # ユーザーIDを入力
-    user_id = "moriyamakaede"
+    user_id = os.getenv("TARGET_USER_ID")
 
     # 今日の日付を取得　文字列で年-月-日の型式にする
     today = dt.now().strftime("%Y-%m-%d")
@@ -58,7 +58,7 @@ def main():
 
     # 重複したカラム名があるとデータポータルで読み込めないため、重複しているカラム名idの左側のほうを残して右側は削除
     df_profile = df_profile.loc[:, ~df_profile.columns.duplicated()]
-    path = "./result"
+    path = os.path.join(base_dir, "result")
     make_result_dirs(path)
     df_profile.to_csv(f"{path}/{user_id}-profile-{today}.csv")
 
@@ -92,9 +92,6 @@ def main():
         print("after_keyがありませんでした。")
         df = make_df(media_data=media_data, data_dict=data_dict)
 
-    # 結果csv保存用のディレクトリ作成
-    path = "./result"
-    make_result_dirs(path)
     df.to_csv(f"{path}/{user_id}_{today}.csv")
 
 
@@ -267,14 +264,14 @@ def make_df(media_data: list, data_dict: dict) -> pd.DataFrame:
         # まず要素を取り出す media_url、caption、hash_tags、timestamp、like_count、comments_count
         media_type = media["media_type"]
         if media_type == "VIDEO":
-            media_url = media["thumbnail_url"]
+            media_url = media.get("thumbnail_url", media.get("media_url", None))
         else:
-            media_url = media["media_url"]
+            media_url = media.get("media_url", None)
         hash_tag_list = re.findall("#([^\s→#\ufeff]*)", caption)
         hash_tags = "\n".join(hash_tag_list)
         timestamp = media["timestamp"].replace("+0000", "").replace("T", " ")
-        like_count = media["like_count"]
-        comments_count = media["comments_count"]
+        like_count = media.get("like_count", None)
+        comments_count = media.get("comments_count", None)
         # data_dictの各リストにappendで要素を入れていく
         data_dict["media_type"].append(media_type)
         data_dict["media_url"].append(media_url)
