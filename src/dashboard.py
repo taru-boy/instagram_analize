@@ -18,6 +18,11 @@ RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 MEDIA_TYPE_JA = {"IMAGE": "画像", "CAROUSEL_ALBUM": "スライド", "VIDEO": "動画"}
 MEDIA_TYPE_COLOR = {"IMAGE": "#E1306C", "CAROUSEL_ALBUM": "#833AB4", "VIDEO": "#F56040"}
 
+# 保存率など「÷リーチ」系の比率ランキングで採用する最小リーチのパーセンタイル。
+# 分母が極小だと比率がノイズ化し、リーチ1桁台の古い投稿が上位を占めるため除外する。
+# 固定値ではなくパーセンタイルにすることで、アカウント成長に閾値が自動追従する。
+REACH_PERCENTILE_FOR_RATE = 0.75
+
 st.set_page_config(
     page_title="Instagram 分析ダッシュボード",
     page_icon="🎨",
@@ -105,54 +110,206 @@ if df_profile.empty and df_media.empty:
     st.stop()
 
 # -------- KPIカード --------
-c1, c2, c3, c4 = st.columns(4)
+# 立ち上げ初期×作品販売/受注の方針に合わせ、ファネル上流
+# （発見→保存→プロフィール訪問→フォロー転換）を主役KPIに据える。
+# 上段は「直近30日の平均＋前30日比」に固定した“今の体調メーター”で、サイドバーの
+# 投稿期間フィルターには連動しない（フィルターは下段の詳細・投稿一覧専用）。
 
+
+def _window_slice(df, anchor, days=30, offset=0):
+    """anchor を基準に (anchor-(offset+days)日, anchor-offset日] の投稿を返す。
+    offset=0 で直近days日、offset=days で1つ前のdays日。"""
+    if df.empty or "post_date" not in df.columns:
+        return df.iloc[0:0]
+    end = anchor - pd.Timedelta(days=offset)
+    start = anchor - pd.Timedelta(days=offset + days)
+    return df[(df["post_date"] > start) & (df["post_date"] <= end)]
+
+
+def _window_rate(df, num_col, den_col="reach"):
+    """リーチ加重の比率 sum(num)/sum(den)*100 と対象件数を返す。
+    分母（リーチ）が極小の投稿に引っ張られないよう、平均ではなく合計同士で割る。
+    算出不能なら (None, 0)。"""
+    if df.empty or num_col not in df.columns or den_col not in df.columns:
+        return None, 0
+    num = pd.to_numeric(df[num_col], errors="coerce")
+    den = pd.to_numeric(df[den_col], errors="coerce")
+    mask = num.notna() & den.notna() & (den > 0)
+    n = int(mask.sum())
+    total_den = den[mask].sum()
+    if n == 0 or total_den <= 0:
+        return None, 0
+    return float(num[mask].sum() / total_den * 100), n
+
+
+def _window_engagement_rate(df):
+    """リーチ加重のエンゲージ率 sum(いいね+コメント)/sum(reach)*100 と件数。"""
+    if df.empty or "reach" not in df.columns:
+        return None, 0
+    reach = pd.to_numeric(df["reach"], errors="coerce")
+    inter = (
+        pd.to_numeric(df.get("like_count"), errors="coerce").fillna(0)
+        + pd.to_numeric(df.get("comments_count"), errors="coerce").fillna(0)
+    )
+    mask = reach.notna() & (reach > 0)
+    n = int(mask.sum())
+    total = reach[mask].sum()
+    if n == 0 or total <= 0:
+        return None, 0
+    return float(inter[mask].sum() / total * 100), n
+
+
+def _window_mean(df, col):
+    """窓内の col の平均と件数を返す。算出不能なら (None, 0)。"""
+    if df.empty or col not in df.columns:
+        return None, 0
+    s = pd.to_numeric(df[col], errors="coerce").dropna()
+    if s.empty:
+        return None, 0
+    return float(s.mean()), int(len(s))
+
+
+def _fmt_delta(recent, prev, kind):
+    """前30日比デルタ文字列。prev/recent が None ならデルタ非表示(None)。
+    kind: 'pt'（率=パーセントポイント）/ 'int'（件数）/ 'float1'（小数1桁）。
+    st.metric は先頭が '-' なら赤・それ以外は緑で色付けする（全KPI高いほど良い）。"""
+    if recent is None or prev is None:
+        return None
+    d = recent - prev
+    if kind == "pt":
+        return f"{d:+.1f}pt"
+    if kind == "int":
+        return f"{d:+,.0f}"
+    return f"{d:+,.1f}"
+
+
+def _followers_at(df_profile, when):
+    """when 以前で最新のフォロワー数を返す。無ければ None。"""
+    sub = df_profile[df_profile["date"] <= when]
+    return int(sub["followers_count"].iloc[-1]) if not sub.empty else None
+
+
+# 直近30日 / 前30日の投稿窓（実時間基準。投稿が止まればその月の件数が減る＝正しいシグナル）
+_now = pd.Timestamp.now().normalize()
+win_recent = _window_slice(df_media, _now, days=30, offset=0)
+win_prev = _window_slice(df_media, _now, days=30, offset=30)
+
+# 各KPIの直近30日値・前30日値（比率はリーチ加重、件数は平均）
+sr_now, n_recent = _window_rate(win_recent, "saved", "reach")
+sr_prev, _ = _window_rate(win_prev, "saved", "reach")
+reach_now, _ = _window_mean(win_recent, "reach")
+reach_prev, _ = _window_mean(win_prev, "reach")
+pv_now, _ = _window_mean(win_recent, "profile_visits")
+pv_prev, _ = _window_mean(win_prev, "profile_visits")
+nf_now, _ = _window_rate(win_recent, "reach_non_follower", "reach")
+nf_prev, _ = _window_rate(win_prev, "reach_non_follower", "reach")
+eng_now, _ = _window_engagement_rate(win_recent)
+eng_prev, _ = _window_engagement_rate(win_prev)
+sh_now, _ = _window_mean(win_recent, "shares")
+sh_prev, _ = _window_mean(win_prev, "shares")
+n_prev = len(win_prev)
+
+# フォロワー純増（直近30日の純増。デルタは前30日の純増との差）
+latest_followers = None
+gain_now = None
+gain_prev = None
 if not df_profile.empty:
     latest_followers = int(df_profile["followers_count"].iloc[-1])
-    target = df_profile["date"].iloc[-1] - pd.Timedelta(days=30)
-    past_df = df_profile[df_profile["date"] <= target]
-    past_followers = int(past_df["followers_count"].iloc[-1]) if not past_df.empty else int(df_profile["followers_count"].iloc[0])
-    delta = latest_followers - past_followers
-    c1.metric("👥 フォロワー数", f"{latest_followers:,}", f"{delta:+,}（30日）")
-else:
-    c1.metric("👥 フォロワー数", "—")
+    p_now = df_profile["date"].iloc[-1]
+    f_now = latest_followers
+    f_30 = _followers_at(df_profile, p_now - pd.Timedelta(days=30))
+    f_60 = _followers_at(df_profile, p_now - pd.Timedelta(days=60))
+    if f_30 is None:  # 履歴が浅い場合は最古値で代替
+        f_30 = int(df_profile["followers_count"].iloc[0])
+    gain_now = f_now - f_30
+    if f_60 is not None:
+        gain_prev = f_30 - f_60
 
-if not df_f.empty and "engagement_rate" in df_f.columns:
-    avg_eng = df_f["engagement_rate"].mean()
-    c2.metric("💬 平均エンゲージメント率", f"{avg_eng:.2f}%")
-    top_likes = int(df_f["like_count"].max())
-    c3.metric("❤️ 最高いいね数", f"{top_likes:,}")
-else:
-    c2.metric("💬 平均エンゲージメント率", "—")
-    c3.metric("❤️ 最高いいね数", "—")
 
-c4.metric("📸 表示中の投稿数", f"{len(df_f):,}件")
+def _val(x, fmt):
+    """値が None なら '—'、そうでなければ fmt で整形。"""
+    return "—" if x is None else fmt(x)
 
-# -------- インサイトKPIカード（リーチ・保存・シェア・プロフィールアクセス） --------
-if HAS_INSIGHTS:
-    df_ins = df_f[df_f["reach"].notna()] if "reach" in df_f.columns else pd.DataFrame()
-    ic1, ic2, ic3, ic4 = st.columns(4)
-    if not df_ins.empty:
-        ic1.metric("👀 平均リーチ", f"{df_ins['reach'].mean():,.0f}")
-        ic2.metric("🔖 平均保存数", f"{df_ins['saved'].mean():,.1f}")
-        ic3.metric("🔁 平均シェア数", f"{df_ins['shares'].mean():,.1f}")
-    else:
-        ic1.metric("👀 平均リーチ", "—")
-        ic2.metric("🔖 平均保存数", "—")
-        ic3.metric("🔁 平均シェア数", "—")
-    # 直近のアカウント全体インサイト（プロフィールアクセス）
-    if not df_account_insights.empty:
-        last = df_account_insights.iloc[-1]
-        ic4.metric(
-            "🏠 プロフィールアクセス（直近）",
-            f"{int(last['profile_views']):,}",
-            help=f"リンククリック {int(last['website_clicks'])} 回 / {last['date'].strftime('%m月%d日')} 時点",
-        )
-    else:
-        ic4.metric("🏠 プロフィールアクセス（直近）", "—")
+
+# === 1段目: 直近30日の重視KPI（前30日比） ===
+st.markdown("##### 🎯 直近30日の重視KPI（前30日比）　— 発見 → 保存 → プロフィール訪問 → フォロー")
+k1, k2, k3, k4 = st.columns(4)
+
+# 🔖 保存率（リーチ加重。北極星: 作品が刺さったか）
+k1.metric(
+    "🔖 保存率", _val(sr_now, lambda v: f"{v:.2f}%"),
+    delta=_fmt_delta(sr_now, sr_prev, "pt"),
+    help="保存数の合計 ÷ リーチの合計（リーチ加重）。作品が刺さった最良のシグナルで、おすすめ拡散の核。1%超で優秀。"
+         if HAS_INSIGHTS else "`python src/collect_insights.py` でインサイトを収集すると表示されます",
+)
+
+# 👀 平均リーチ（発見: 1投稿が届いた人数）
+k2.metric(
+    "👀 平均リーチ", _val(reach_now, lambda v: f"{v:,.0f}"),
+    delta=_fmt_delta(reach_now, reach_prev, "int"),
+    help="1投稿が届いた人数の平均。リール・保存・シェアで新規の発見が増えます。",
+)
+
+# 🏠 平均プロフィール訪問（販売・受注の入口）
+k3.metric(
+    "🏠 平均プロフィール訪問", _val(pv_now, lambda v: f"{v:,.1f}"),
+    delta=_fmt_delta(pv_now, pv_prev, "float1"),
+    help="投稿を見てプロフィールに来た数（投稿あたり平均）。販売・受注の入口。",
+)
+
+# 📈 フォロワー純増（フォロー転換の代理指標）
+k4.metric(
+    "📈 フォロワー純増", _val(gain_now, lambda v: f"{v:+,}"),
+    delta=_fmt_delta(gain_now, gain_prev, "int"),
+    help="直近30日のフォロワー純増。プロフィール訪問→フォロー転換の代理指標。デルタは前30日の純増との差。",
+)
+
+# === 2段目: 補助KPI ===
+s1, s2, s3, s4 = st.columns(4)
+
+# 🆕 フォロワー外リーチ比率（リーチ加重。発見＝新規との出会い）
+s1.metric(
+    "🆕 フォロワー外リーチ比率", _val(nf_now, lambda v: f"{v:.0f}%"),
+    delta=_fmt_delta(nf_now, nf_prev, "pt"),
+    help="フォロワー以外に届いたリーチの割合（リーチ加重）。発見＝新規との出会いの指標。リールで伸ばせます。",
+)
+
+# 👥 フォロワー数（最新・時点値）
+s2.metric("👥 フォロワー数", _val(latest_followers, lambda v: f"{v:,}"))
+
+# 💬 エンゲージ率（リーチ加重・直近30日）
+s3.metric(
+    "💬 エンゲージ率（リーチ基準）", _val(eng_now, lambda v: f"{v:.2f}%"),
+    delta=_fmt_delta(eng_now, eng_prev, "pt"),
+    help="(いいね＋コメント) の合計 ÷ リーチの合計。届いた人のうち反応した割合。",
+)
+
+# 🔁 平均シェア数（リーチ拡大の二次エンジン）
+s4.metric(
+    "🔁 平均シェア数", _val(sh_now, lambda v: f"{v:,.1f}"),
+    delta=_fmt_delta(sh_now, sh_prev, "float1"),
+    help="ストーリーズ/DMでの共有（投稿あたり平均）。保存と並ぶリーチ拡大の二次エンジン。",
+)
+
+# 集計範囲とアカウント全体インサイト（販売導線の最終指標）の補足
+st.caption(
+    f"※ 上段KPIは**直近30日**の投稿 {n_recent} 件（前30日は {n_prev} 件）から算出・前30日比。"
+    "比率はリーチ加重。フォロワー純増は最新−30日前。サイドバーの期間フィルターは下段にのみ効きます。"
+)
+if not df_account_insights.empty:
+    last = df_account_insights.iloc[-1]
     st.caption(
-        f"※ インサイトは直近 {int(df_media['reach'].notna().sum())} 件の投稿で取得済み"
-        "（`python src/collect_insights.py` で更新）"
+        f"🔗 直近のアカウント全体: プロフィールアクセス {int(last['profile_views']):,} ／ "
+        f"リンククリック {int(last['website_clicks'])} 回（{last['date'].strftime('%m月%d日')}時点・販売導線の最終指標）"
+    )
+if not HAS_INSIGHTS:
+    st.caption(
+        "💡 `python src/collect_insights.py` でリーチ・保存・プロフィール訪問を収集すると、"
+        "上段の重視KPI（保存率・リーチ・プロフィール訪問など）が表示されます。"
+    )
+elif n_recent == 0:
+    st.caption(
+        "⚠️ 直近30日にインサイト付きの投稿がありません。`python src/collect_insights.py` でインサイトを更新してください。"
     )
 
 st.divider()
@@ -184,22 +341,36 @@ st.divider()
 
 # -------- Section 2: 投稿パフォーマンス一覧 --------
 st.subheader("🏆 投稿パフォーマンス一覧")
+st.caption(
+    "📊＝総エンゲージ率（いいね＋コメント＋**保存＋シェア** ÷ 投稿時点フォロワー）。"
+    "保存・シェアはインサイトのある投稿でのみ加算され、未取得の古い投稿はいいね＋コメントで算出します。"
+)
 
 if not df_f.empty:
     ctrl_l, ctrl_r = st.columns([3, 1])
     with ctrl_l:
-        sort_options = {
-            "like_count": "❤️ いいね数が多い順",
-            "comments_count": "💬 コメント数が多い順",
-            "engagement_rate": "📊 エンゲージメント率が高い順",
-            "timestamp_jst": "🕐 新しい投稿順",
-        }
+        # 保存率（保存数÷リーチ）はリーチが小さい昔の投稿ほど高く出る構造的バイアスがあり、
+        # 時代をまたいだ比較に向かない。代わりに絶対「保存数」を既定の並び順にする。
         if HAS_INSIGHTS:
-            sort_options.update({
-                "reach": "👀 リーチが多い順",
+            sort_options = {
                 "saved": "🔖 保存数が多い順",
+                "reach": "👀 リーチが多い順",
                 "shares": "🔁 シェア数が多い順",
-            })
+                "saved_rate": "🔖 保存率が高い順（参考・リーチ小に偏りやすい）",
+                "like_count": "❤️ いいね数が多い順",
+                "comments_count": "💬 コメント数が多い順",
+                "total_engagement_rate": "📊 エンゲージ率（保存・シェア込）が高い順",
+                "timestamp_jst": "🕐 新しい投稿順",
+            }
+        else:
+            sort_options = {
+                "like_count": "❤️ いいね数が多い順",
+                "comments_count": "💬 コメント数が多い順",
+                "engagement_rate": "📊 エンゲージメント率が高い順",
+                "timestamp_jst": "🕐 新しい投稿順",
+            }
+        # 実際に存在する列だけに絞る（キャッシュが古く列が無くても KeyError にしない）
+        sort_options = {k: v for k, v in sort_options.items() if k in df_f.columns}
         sort_col = st.selectbox(
             "並べ替え",
             options=list(sort_options.keys()),
@@ -208,7 +379,15 @@ if not df_f.empty:
     with ctrl_r:
         n_show = st.select_slider("表示件数", options=[6, 9, 12, 18, 24, 30], value=12)
 
-    df_sorted = df_f.sort_values(sort_col, ascending=False, na_position="last")
+    # 保存率で並べる場合は、分母（リーチ）が極小なノイズ投稿を保存率ランキングと同じ基準で除外する
+    df_to_sort = df_f
+    if sort_col == "saved_rate" and "reach" in df_f.columns and df_f["reach"].notna().any():
+        reach_floor = df_f["reach"].quantile(REACH_PERCENTILE_FOR_RATE)
+        pct_label = int(round((1 - REACH_PERCENTILE_FOR_RATE) * 100))
+        df_to_sort = df_f[df_f["reach"] >= reach_floor]
+        st.caption(f"保存率順はリーチ上位{pct_label}%（{reach_floor:.0f}以上）の投稿のみを対象にしています（分母が小さい古い投稿を除外）。")
+
+    df_sorted = df_to_sort.sort_values(sort_col, ascending=False, na_position="last")
     posts = df_sorted.head(n_show).reset_index(drop=True)
 
     for i in range(0, len(posts), 5):
@@ -229,9 +408,11 @@ if not df_f.empty:
                 type_ja = MEDIA_TYPE_JA.get(row["media_type"], row["media_type"])
                 st.markdown(f"**{date_str}**　`{type_ja}`")
 
-                eng_str = ""
-                if "engagement_rate" in posts.columns and pd.notna(row.get("engagement_rate")):
-                    eng_str = f"　📊 {row['engagement_rate']:.1f}%"
+                # 総エンゲージ率（保存・シェア込）を優先表示。無ければ基本ERにフォールバック
+                eng_val = row.get("total_engagement_rate")
+                if pd.isna(eng_val):
+                    eng_val = row.get("engagement_rate")
+                eng_str = f"　📊 {eng_val:.1f}%" if pd.notna(eng_val) else ""
                 st.caption(f"❤️ {int(row['like_count']):,}　💬 {int(row['comments_count']):,}{eng_str}")
 
                 # インサイトがあれば2行目に表示
@@ -355,7 +536,13 @@ if HAS_INSIGHTS:
         st.subheader("👀 リーチ・保存分析")
         st.caption("インサイト取得済みの投稿のみが対象です。")
 
-        tab_r1, tab_r2, tab_r3 = st.tabs(["📈 リーチ推移", "🔖 保存率ランキング", "📸 タイプ別リーチ"])
+        tab_labels = ["📈 リーチ推移", "🔖 保存数ランキング", "📸 タイプ別リーチ"]
+        has_nf = "non_follower_reach_rate" in df_ri.columns and df_ri["non_follower_reach_rate"].notna().any()
+        if has_nf:
+            tab_labels.append("🆕 フォロワー外リーチ")
+        tabs_r = st.tabs(tab_labels)
+        tab_r1, tab_r2, tab_r3 = tabs_r[0], tabs_r[1], tabs_r[2]
+        tab_r4 = tabs_r[3] if has_nf else None
 
         with tab_r1:
             df_ri_sorted = df_ri.sort_values("timestamp_jst")
@@ -372,8 +559,17 @@ if HAS_INSIGHTS:
             st.plotly_chart(fig_r, use_container_width=True)
 
         with tab_r2:
-            st.markdown("**保存率（保存数 ÷ リーチ）が高い投稿 TOP10**　— 保存される＝あとで見返したい良コンテンツ")
-            top_saved = df_ri[df_ri["saved_rate"].notna()].sort_values("saved_rate", ascending=False).head(10)
+            # 保存率（保存数÷リーチ）はリーチが小さい昔の投稿ほど高く出る構造的バイアスがあるため、
+            # 絶対「保存数」でランキングする（保存率は参考列として併記）。
+            st.markdown(
+                "**保存数が多い投稿 TOP10**　— 保存される＝あとで見返したい良コンテンツ"
+                "（保存率は分母のリーチが小さい昔の投稿ほど高く出るため、件数そのもので評価）"
+            )
+            top_saved = (
+                df_ri[df_ri["saved"].notna()]
+                .sort_values("saved", ascending=False)
+                .head(10)
+            )
             if not top_saved.empty:
                 disp = top_saved[["timestamp_jst", "media_type", "reach", "saved", "saved_rate", "like_count"]].copy()
                 disp["timestamp_jst"] = disp["timestamp_jst"].dt.strftime("%Y/%m/%d")
@@ -381,7 +577,7 @@ if HAS_INSIGHTS:
                 disp.columns = ["投稿日", "タイプ", "リーチ", "保存数", "保存率(%)", "いいね"]
                 st.dataframe(disp, use_container_width=True, hide_index=True)
             else:
-                st.info("保存率データがありません")
+                st.info("保存数データがありません")
 
         with tab_r3:
             type_ins = (
@@ -409,6 +605,42 @@ if HAS_INSIGHTS:
                 fig_rb.update_traces(texttemplate="%{text:.1f}", textposition="outside")
                 fig_rb.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
                 st.plotly_chart(fig_rb, use_container_width=True)
+
+        if tab_r4 is not None:
+            with tab_r4:
+                st.markdown(
+                    "**フォロワー外リーチ比率の推移**　— 新規（フォロワー以外）にどれだけ届いたか。"
+                    "立ち上げ初期は、この比率を高く保つことが発見＝新規フォロワー獲得につながります。"
+                )
+                df_nf = df_ri[df_ri["non_follower_reach_rate"].notna()].sort_values("timestamp_jst").copy()
+                df_nf["type_ja"] = df_nf["media_type"].map(MEDIA_TYPE_JA).fillna(df_nf["media_type"])
+                fig_nf = px.bar(
+                    df_nf,
+                    x="timestamp_jst",
+                    y="non_follower_reach_rate",
+                    color="type_ja",
+                    labels={
+                        "timestamp_jst": "投稿日時",
+                        "non_follower_reach_rate": "フォロワー外リーチ比率 (%)",
+                        "type_ja": "タイプ",
+                    },
+                    color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
+                )
+                fig_nf.update_layout(
+                    plot_bgcolor="white", yaxis=dict(gridcolor="#f5f5f5"),
+                    margin=dict(l=0, r=0, t=10, b=0),
+                )
+                st.plotly_chart(fig_nf, use_container_width=True)
+                avg_nf = df_nf["non_follower_reach_rate"].mean()
+                # フォロワー外リーチ比率が高い投稿 TOP5（何が新規に届いたかの手がかり）
+                top_nf = df_nf.sort_values("non_follower_reach_rate", ascending=False).head(5)
+                st.caption(f"平均フォロワー外リーチ比率: {avg_nf:.1f}%")
+                disp_nf = top_nf[["timestamp_jst", "media_type", "reach", "reach_non_follower", "non_follower_reach_rate"]].copy()
+                disp_nf["timestamp_jst"] = disp_nf["timestamp_jst"].dt.strftime("%Y/%m/%d")
+                disp_nf["media_type"] = disp_nf["media_type"].map(MEDIA_TYPE_JA).fillna(disp_nf["media_type"])
+                disp_nf.columns = ["投稿日", "タイプ", "リーチ", "うち新規", "新規比率(%)"]
+                st.markdown("**新規に最も届いた投稿 TOP5**")
+                st.dataframe(disp_nf, use_container_width=True, hide_index=True)
 
         st.divider()
 

@@ -351,6 +351,54 @@ def actionable_advice(
 
     advice = []
 
+    # 0. 発見→保存→プロフィール導線（インサイトがある場合の最優先助言）
+    #    立ち上げ初期×作品販売/受注では、ファネル上流の「保存・リーチ・プロフィール訪問」を最重視する。
+    if "reach" in df_media.columns and df_media["reach"].notna().any():
+        ins = df_media[df_media["reach"].notna()]
+
+        # 保存率（北極星指標）を上げる
+        if "saved_rate" in ins.columns and ins["saved_rate"].notna().any():
+            mean_sr = float(ins["saved_rate"].mean())
+            if mean_sr < 1.0:
+                advice.append(
+                    f"保存率は平均{mean_sr:.2f}%（目安は1%超）。作品の制作背景やモチーフの物語を"
+                    "キャプションに添え、「保存して見返してね」と一言入れると、おすすめ拡散の核となる"
+                    "保存が伸びます。"
+                )
+            sr_by_type = (
+                ins.dropna(subset=["saved_rate"])
+                .groupby("media_type")["saved_rate"]
+                .agg(["mean", "count"])
+            )
+            sr_by_type = sr_by_type[sr_by_type["count"] >= 2].sort_values("mean", ascending=False)
+            if len(sr_by_type) >= 2:
+                top_t = sr_by_type.index[0]
+                advice.append(
+                    f"保存率が最も高いのは「{MEDIA_TYPE_JA.get(top_t, top_t)}」"
+                    f"（平均{sr_by_type.iloc[0]['mean']:.2f}%）。この型を増やすと保存が積み上がります。"
+                )
+
+        # リール（動画）で新規の発見＝フォロワー外リーチを稼ぐ
+        reach_by_type = ins.groupby("media_type")["reach"].mean()
+        if "VIDEO" in reach_by_type.index and len(reach_by_type) >= 2:
+            video_reach = float(reach_by_type["VIDEO"])
+            other = ins[ins["media_type"] != "VIDEO"]["reach"]
+            other_reach = float(other.mean()) if not other.empty else 0.0
+            if other_reach > 0 and video_reach >= other_reach * 1.2:
+                advice.append(
+                    f"動画（リール）の平均リーチ{video_reach:,.0f}は静止画（{other_reach:,.0f}）より高めです。"
+                    "制作過程・タイムラプスのリールを週1〜2本入れると新規の発見が増えます。"
+                )
+
+        # プロフィール訪問→販売・受注の導線整備
+        if "profile_visits" in ins.columns and ins["profile_visits"].notna().any():
+            pv = float(ins["profile_visits"].mean())
+            if pv > 0:
+                advice.append(
+                    f"投稿あたり平均{pv:,.1f}人がプロフィールに来ています。ハイライトに"
+                    "「販売中／お問い合わせ／制作の流れ」を固定し、リンクと料金を明記すると受注につながります。"
+                )
+
     # 1. 伸びるタイプを増やす提案
     types = best_media_type(df_media)
     if len(types) >= 2:

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Instagram投稿データ収集・分析ツール。Facebook Graph API の Business Discovery APIを使って、指定したInstagramアカウントのプロフィール情報・投稿データをCSVに保存する。さらに競合アカウント・ハッシュタグ人気投稿のトレンドを集め、統計＋Claude AIで「次の投稿案」を提案する。
+Instagram投稿データ収集・分析ツール。Facebook Graph API の Business Discovery API を使って、指定したInstagramアカウントのプロフィール情報・投稿データをCSVに保存する。さらに競合アカウント・ハッシュタグ人気投稿のトレンドを集め、統計＋Claude AIで「次の投稿案」を提案する。
 
-**重要：`ACCESS_TOKEN`/`IG_USER_ID` は妻のアカウント本体のトークン。** そのため Business Discovery 経由（like/commentのみ）に加え、インサイト系エンドポイント（`/{media-id}/insights`、`/{ig-user-id}/insights`）を直接叩いてリーチ・保存・シェア・プロフィールアクセス・リンククリックも取得できる（`collect_insights.py`）。
+**重要：`ACCESS_TOKEN`／`IG_USER_ID` は妻のアカウント本体のトークン。** Business Discovery ではいいね・コメントしか取れないが、本体トークンならインサイト系エンドポイント（`/{media-id}/insights`、`/{ig-user-id}/insights`）を直接叩けるため、リーチ・保存・シェア・プロフィールアクセス・リンククリックも取得できる（`collect_insights.py`）。
 
 ## ディレクトリ構成
 
@@ -57,7 +57,7 @@ TREND_HASHTAGS=水彩画,イラスト,アート  # トレンド収集タグ（�
 ```bash
 # プロジェクトルートから実行
 python src/collect.py              # 妻アカウントの収集
-python src/collect_insights.py     # インサイト収集（直近200件。--all で全件、--limit Nで件数指定）
+python src/collect_insights.py     # インサイト収集（直近200件。--all で全件、--limit Nで件数指定、--no-breakdown でフォロワー外リーチ分解を省略）
 python src/collect_competitors.py  # 競合アカウントの収集
 python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 ```
@@ -65,8 +65,8 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 実行すると `result/` 配下にCSVが保存される：
 - `{TARGET_USER_ID}-profile-{today}.csv` — プロフィール情報（フォロワー数・フォロー数・投稿数など）
 - `{TARGET_USER_ID}_{today}.csv` — 投稿一覧（**id**・メディアURL・キャプション・ハッシュタグ・いいね数・コメント数・メディアタイプ）
-- `insights/{IG_USER_ID}_media_insights_{today}.csv` — 投稿ID別インサイト（reach/saved/shares/total_interactions/profile_visits/views）
-- `insights/{IG_USER_ID}_account_insights_{today}.csv` — アカウント日次インサイト（profile_views/website_clicks/reach/accounts_engaged）
+- `insights/{IG_USER_ID}_media_insights_{today}.csv` — 投稿ID別インサイト（reach/**reach_follower/reach_non_follower**/saved/shares/total_interactions/profile_visits/views）
+- `insights/{IG_USER_ID}_account_insights_{today}.csv` — アカウント日次インサイト（profile_views/website_clicks/reach/accounts_engaged/**reach_follower/reach_non_follower**）
 - `competitors/{username}-profile-{today}.csv` / `competitors/{username}_{today}.csv` — 競合のプロフィール・投稿
 - `hashtags/{tag}_{today}.csv` — タグ別の人気投稿（top_media）
 - `suggestions/{today}.json` — AI生成の投稿案キャッシュ（同日は再課金しない）
@@ -89,14 +89,20 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - `fetch_media_insights()` — `/{media-id}/insights` を叩く。**メディアタイプで metric を分岐**
   （IMAGE/CAROUSEL: reach,saved,shares,total_interactions,profile_visits ／ VIDEO/REELS: …+views）。
   タイプ非対応の `#100` エラー時は CORE_METRICS（reach,saved,shares）でフォールバック。
+- `_request_reach_breakdown()` — **フォロワー外リーチ**（発見＝新規との出会いの指標）を取得。`reach` を
+  `breakdown=follower_type&metric_type=total_value` で分解し `reach_follower`／`reach_non_follower` を得る。
+  他メトリックと混在できないため reach 専用の追加リクエストとして発行（メディア・アカウント共用）。
+  非対応・エラー時は None で握りつぶし、その投稿は欠損のまま。`--no-breakdown` で省略可（リクエスト数を半減）。
 - `fetch_account_insights()` — `/{IG_USER_ID}/insights?...&metric_type=total_value` でアカウント日次インサイト。
+  当日 reach の follower_type 分解（`period=day`）もマージする。
 - レート制限対策：デフォルトは直近200件のみ。`--all` で全件、`--limit N` で件数指定、`--sleep` でウェイト調整。
+  **breakdown 有効時はメディア1件あたり2リクエストになる**ため、件数が多い場合は `--no-breakdown` か `--limit` を併用。
 
 ### トレンド収集
 
 - `collect_competitors.py` — `COMPETITOR_USERNAMES` の各アカウントを `collect_account()` で収集。
-- `collect_hashtags.py` — `ig_hashtag_search` でタグIDを取得 → `{hashtag_id}/top_media` で人気投稿を取得。
-  **API制限: 1アカウントにつき7日間で30ユニークタグまで／200req毎時。** タグ数は絞り、cronは週1〜2回に。
+- `collect_hashtags.py` — `ig_hashtag_search` でタグIDを取得し、`{hashtag_id}/top_media` で人気投稿を取得。
+  **API制限: 1アカウントにつき7日間で30ユニークタグまで／毎時200リクエストまで。** タグ数は絞り、cronは週1〜2回に抑える。
 
 ### 投稿提案（`src/insights.py` + `src/suggest.py`）
 
@@ -106,7 +112,8 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
   `hashtag_count_analysis()`（最適なタグ個数。0個推奨は避ける`best_actionable_band`を提供）・
   `posting_cadence()`（投稿ペース・傾向）・`low_performers()`（避けたい条件）・
   `competitor_gap()`（競合が多用＆未使用のタグ／エンゲージ比較）・
-  `actionable_advice()`（★上記を総合したルールベースの日本語「次にやるべきこと」助言）・
+  `actionable_advice()`（★上記を総合したルールベースの日本語「次にやるべきこと」助言。インサイトがある場合は
+  保存率を上げる施策・リールでフォロワー外リーチを稼ぐ・プロフィール販売導線の整備を最優先で提示）・
   `build_summary()`（一括）。
 - `suggest.py` — 統計サマリ＋高エンゲージ投稿例＋トレンドをプロンプト化し、`claude-opus-4-8` に
   構造化出力（`messages.parse()` + Pydantic）でリクエスト。投稿案3〜5件（テーマ・キャプション案・
@@ -128,12 +135,23 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 
 ### ダッシュボードの構成（`src/dashboard.py`）
 
-- **KPIカード** — フォロワー数・30日比・平均エンゲージメント率・投稿数
-- **インサイトKPI**（インサイト取得時のみ）— 平均リーチ・平均保存数・平均シェア数・直近プロフィールアクセス（+リンククリック）
+- **重視KPI（1段目）= 「直近30日の平均＋前30日比」の“今の体調メーター”** — 立ち上げ初期×作品販売/受注の方針に合わせ、
+  ファネル上流を主役に据える：🔖保存率（北極星＝作品が刺さったか）・👀平均リーチ・🏠平均プロフィール訪問（販売の入口）・
+  📈フォロワー純増（フォロー転換の代理）。各カードに前30日比デルタ（緑/赤）付き。
+  **重要: 上段は固定の直近30日スナップショットで、サイドバーの投稿期間フィルターには連動しない**
+  （フィルターは下段の詳細・投稿一覧専用）。インサイト未取得・直近30日に該当無しの場合は「—」表示。
+- **補助KPI（2段目）** — 🆕フォロワー外リーチ比率（リーチ加重）・👥フォロワー数（最新時点）・
+  💬エンゲージ率（リーチ基準）・🔁平均シェア数。いずれも直近30日＋前期比（フォロワー数のみ時点値）。
+- **集計方式の要点** — 比率KPI（保存率・フォロワー外リーチ比率・エンゲージ率）は**リーチ加重の集計 `sum(分子)/sum(リーチ)`**で
+  算出し、分母が極小の投稿に引っ張られないようにする（単純平均ではない。投稿は除外しない）。件数KPI（リーチ・
+  プロフィール訪問・シェア）は1投稿あたりの平均。窓は `pd.Timestamp.now()` 基準の直近30日 `(now-30d, now]` と前30日。
+  ヘルパーは dashboard.py 内の `_window_rate`／`_window_mean`／`_window_engagement_rate`／`_fmt_delta`。
+  （`REACH_PERCENTILE_FOR_RATE` は投稿一覧を「保存率」で並べ替えるときにリーチ下位を除外する**表示専用**で、上段KPIには使わない。）
+- いいね数・最高いいねは投稿一覧で確認する位置づけに降格。アカウント全体のプロフィールアクセス/リンククリックはキャプションに表示
 - **フォロワー推移** — 全期間の折れ線グラフ
-- **投稿パフォーマンス一覧** — サムネイル付き、いいね/コメント/エンゲージメント率/リーチ/保存/シェアでソート可。インサイトがあればカードに👀リーチ・🔖保存・🔁シェア・▶️再生数も表示
+- **投稿パフォーマンス一覧** — サムネイル付き、保存数/リーチ/シェア/保存率(参考)/いいね/コメント/総エンゲージ率でソート可（インサイトがある場合の既定は**保存数**）。カードの📊は総エンゲージ率（保存・シェア込）、2行目に👀リーチ・🔖保存・🔁シェア・▶️再生数も表示。保存率ソート時のみ `REACH_PERCENTILE_FOR_RATE` でリーチ下位を除外
 - **エンゲージメント分析** — 時系列散布図・曜日時間帯ヒートマップ・タイプ別比較
-- **リーチ・保存分析**（インサイト取得時のみ）— リーチ推移・保存率ランキングTOP10・タイプ別リーチ/保存
+- **リーチ・保存分析**（インサイト取得時のみ）— リーチ推移・**保存数ランキングTOP10**（保存率は分母リーチが小さい古い投稿ほど高く出るため件数で評価）・タイプ別リーチ/保存・**フォロワー外リーチ**（比率の推移＋新規に最も届いた投稿TOP5。`non_follower_reach_rate` がある場合のみタブ表示）
 - **ハッシュタグ分析** — いいね数が多いタグ・使用頻度ランキング（各TOP20）
 - **投稿提案** — ①「📋 次にやるべきこと」（統計から自動生成の助言・無料）②「伸びる条件」カード
   （最適タイミング・伸びるタイプ・効くタグ・業界トレンド）③「伸びる投稿の型」（最適キャプション長・
@@ -147,7 +165,7 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - `merge_follower_at_post_date()` — 各投稿日のフォロワー数を紐付けてエンゲージメント率を計算
 - `load_insights_data()` — `result/insights/` の**全**メディア別インサイトCSVを統合し、`id` ごとに最新の非欠損値を採用（日次で直近N件のみ収集しても、過去 `--all` で取得した全履歴のカバレッジが失われない。`groupby.last()` を利用）
 - `load_account_insights_data()` — `result/insights/` の全アカウント別インサイトCSVを日次推移として結合
-- `merge_insights()` — メディアデータに `id` でインサイト列を結合。保存率 `saved_rate`・リーチベースのエンゲージ率 `reach_engagement_rate` を算出
+- `merge_insights()` — メディアデータに `id` でインサイト列を結合。保存率 `saved_rate`・リーチベースのエンゲージ率 `reach_engagement_rate`・フォロワー外リーチ比率 `non_follower_reach_rate`（`reach_non_follower`／`reach`）・総エンゲージ率 `total_engagement_rate`（`total_interactions`＝いいね＋コメント＋保存＋シェア ÷ 投稿時点フォロワー。`total_interactions` が無い投稿は基本ERにフォールバック）を算出
 - `load_competitor_data()` — `result/competitors/` の各競合の最新メディアCSVを結合（`competitor`列付き）
 - `load_hashtag_data()` — `result/hashtags/` の各タグの最新CSVを結合（`search_hashtag`列付き）
 
@@ -158,10 +176,11 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - ハッシュタグの top_media では投稿者のフォロワー数・ユーザー名は取得できない（いいね/コメント/キャプション/タイプは取得可）
 - `result/` と `.env` は `.gitignore` で除外済み
 - ダッシュボードのサムネイルはInstagramのCDN URLのため、古い投稿は表示されない場合がある（有効期限あり）
-- エンゲージメント率 = (いいね数 + コメント数) / 投稿日時点のフォロワー数 × 100
+- エンゲージメント率 = (いいね数 + コメント数) / 投稿日時点のフォロワー数 × 100（基本ER。`engagement_rate`。散布図やbest_slots等の全期間比較に使用）。
+  なお**投稿パフォーマンス一覧の📊は保存・シェアを含む総エンゲージ率 `total_engagement_rate`**（Meta の `total_interactions` 基準）を表示・並べ替え対象にする。販売/受注目的では保存が北極星のため、一覧は保存・シェア込みで評価する
 - AI投稿案は `claude-opus-4-8` を使用。生成1回ごとに少額課金が発生（同日キャッシュで再課金回避）
-- インサイトとメディアCSVは `id` で結合する。`id` 列はある時点から追加されたため、それ以前のメディアCSVには `id` が無くインサイトが結合できない（`collect.py` を再実行すれば最新CSVに `id` が付与される）
+- インサイトとメディアCSVは `id` で結合する。`id` 列はある時点から追加されたため、それ以前のメディアCSVには `id` が無くインサイトを結合できない（`collect.py` を再実行すれば最新CSVに `id` が付与される）
 - `profile_visits`（投稿経由のプロフィール訪問）と `profile_views`（アカウント全体のプロフィールアクセス）は別物
 - アカウントインサイトは `period=day`（当日分のみ）。推移を見るには日次cron（`run.sh`）で毎日蓄積する
-- インサイトAPIにもレート制限（200req/h）あり。`collect_insights.py` はデフォルトで直近200件のみ取得
-- APIバージョンは v22.0。欲しいインサイト指標は v22 で全取得可能（バージョンアップは任意）。`impressions`・非Reelsの`video_views` は2025年に廃止済み（→`reach`・`views`で代替）
+- インサイトAPIにもレート制限（毎時200リクエスト）あり。`collect_insights.py` はデフォルトで直近200件のみ取得する
+- APIバージョンは v22.0。欲しいインサイト指標は v22 ですべて取得可能（バージョンアップは任意）。`impressions` と非Reelsの `video_views` は2025年に廃止済み（それぞれ `reach`・`views` で代替）

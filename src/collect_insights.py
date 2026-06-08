@@ -11,10 +11,17 @@ collect.py が使う Business Discovery API は like/comment しか返さない�
 
 .env は collect.py と共通（ACCESS_TOKEN / VERSION / IG_USER_ID）。新しい環境変数は不要。
 
+フォロワー外リーチ（発見＝新規との出会いの指標）は reach を follower_type で
+分解して取得する（reach_follower / reach_non_follower）。これは metric_type=total_value
+必須で他メトリックと混在できないため、reach 専用の追加リクエストで取得する。
+そのぶんメディア1件あたりのリクエスト数が増えるため、レート制限が気になる場合は
+--no-breakdown で無効化できる。
+
 使い方:
     python src/collect_insights.py            # 直近 200 件のメディア＋アカウントを収集
     python src/collect_insights.py --limit 50 # 直近 50 件だけ（レート制限対策）
     python src/collect_insights.py --all      # 全メディアを収集（963件あると時間がかかる）
+    python src/collect_insights.py --no-breakdown  # フォロワー外リーチの分解を取らない（リクエスト半減）
 """
 
 import argparse
@@ -47,6 +54,8 @@ MEDIA_INSIGHT_COLUMNS = [
     "media_type",
     "timestamp",
     "reach",
+    "reach_follower",
+    "reach_non_follower",
     "saved",
     "shares",
     "total_interactions",
@@ -60,6 +69,11 @@ def main():
     parser.add_argument("--limit", type=int, default=200, help="収集する直近メディア件数（デフォルト200）")
     parser.add_argument("--all", action="store_true", help="全メディアを収集する")
     parser.add_argument("--sleep", type=float, default=0.3, help="リクエスト間のウェイト秒（レート制限対策）")
+    parser.add_argument(
+        "--no-breakdown",
+        action="store_true",
+        help="フォロワー外リーチ（reach の follower_type 分解）を取得しない。リクエスト数を半減できる。",
+    )
     args = parser.parse_args()
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -86,7 +100,11 @@ def main():
     rows = []
     for i, media in enumerate(media_list, 1):
         insights = fetch_media_insights(
-            version, media["id"], media["media_type"], access_token
+            version,
+            media["id"],
+            media["media_type"],
+            access_token,
+            with_breakdown=not args.no_breakdown,
         )
         row = {
             "id": media["id"],
@@ -110,7 +128,9 @@ def main():
     print(f"メディア別インサイトを保存: {media_path}")
 
     # --- アカウント別インサイト ---
-    account_rows = fetch_account_insights(version, ig_user_id, access_token)
+    account_rows = fetch_account_insights(
+        version, ig_user_id, access_token, with_breakdown=not args.no_breakdown
+    )
     if account_rows:
         df_account = pd.DataFrame([account_rows])
         df_account.insert(0, "date", today)
@@ -165,18 +185,73 @@ def fetch_media_list(
 
 
 def fetch_media_insights(
-    version: str, media_id: str, media_type: str, access_token: str
+    version: str,
+    media_id: str,
+    media_type: str,
+    access_token: str,
+    with_breakdown: bool = True,
 ) -> dict:
     """
     1メディア分のインサイトを取得して {metric_name: value} の辞書で返す。
     タイプ非対応メトリックで #100 が出た場合は CORE_METRICS でリトライする。
+    with_breakdown=True のときは reach を follower_type で分解した
+    reach_follower / reach_non_follower も追加で取得してマージする
+    （取得できない投稿はキー無し＝後段で欠損になる）。
     """
     metrics = MEDIA_METRICS.get(media_type, CORE_METRICS)
     result = _request_media_insights(version, media_id, metrics, access_token)
     if result is None:
         # メトリック非対応などのエラー → 最小セットで再試行
         result = _request_media_insights(version, media_id, CORE_METRICS, access_token)
-    return result or {}
+    result = result or {}
+    if with_breakdown:
+        breakdown = _request_reach_breakdown(
+            version, f"{media_id}/insights", access_token
+        )
+        if breakdown:
+            result.update(breakdown)
+    return result
+
+
+def _request_reach_breakdown(
+    version: str, node: str, access_token: str, period: str | None = None
+) -> dict | None:
+    """
+    reach を follower_type（follower / non_follower）で分解して取得する。
+    node はメディアの "{media-id}/insights" でも、アカウントの "{ig-user-id}/insights" でも可。
+    metric_type=total_value が必須で、結果は total_value.breakdowns に入る。
+    アカウントレベルの reach は period=day が必須なので period を指定する。
+    非対応・エラー時は None を返す。
+
+    Returns
+    -------
+    dict | None
+        {"reach_follower": int, "reach_non_follower": int}（取れたものだけ）。
+    """
+    period_param = f"&period={period}" if period else ""
+    url = (
+        f"https://graph.facebook.com/{version}/{node}"
+        f"?metric=reach&breakdown=follower_type&metric_type=total_value{period_param}"
+        f"&access_token={access_token}"
+    )
+    r = requests.get(url)
+    data = json.loads(r.content)
+    if "error" in data:
+        return None
+    out = {}
+    for item in data.get("data", []):
+        if item.get("name") != "reach":
+            continue
+        for bd in item.get("total_value", {}).get("breakdowns", []):
+            for res in bd.get("results", []):
+                dims = res.get("dimension_values", [])
+                if not dims:
+                    continue
+                if dims[0] == "follower":
+                    out["reach_follower"] = res.get("value")
+                elif dims[0] == "non_follower":
+                    out["reach_non_follower"] = res.get("value")
+    return out or None
 
 
 def _request_media_insights(
@@ -203,10 +278,14 @@ def _request_media_insights(
     return out
 
 
-def fetch_account_insights(version: str, ig_user_id: str, access_token: str) -> dict:
+def fetch_account_insights(
+    version: str, ig_user_id: str, access_token: str, with_breakdown: bool = True
+) -> dict:
     """
     アカウント全体の日次インサイト（profile_views/website_clicks/reach/accounts_engaged）を取得。
     metric_type=total_value が必須。
+    with_breakdown=True のときは当日 reach の follower_type 分解
+    （reach_follower / reach_non_follower）も追加リクエストで取得してマージする。
     """
     metric_str = ",".join(ACCOUNT_METRICS)
     url = (
@@ -223,6 +302,12 @@ def fetch_account_insights(version: str, ig_user_id: str, access_token: str) -> 
         name = item.get("name")
         total = item.get("total_value", {})
         out[name] = total.get("value")
+    if with_breakdown:
+        breakdown = _request_reach_breakdown(
+            version, f"{ig_user_id}/insights", access_token, period="day"
+        )
+        if breakdown:
+            out.update(breakdown)
     return out
 
 

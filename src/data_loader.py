@@ -145,7 +145,16 @@ def load_hashtag_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-_INSIGHT_NUMERIC = ["reach", "saved", "shares", "total_interactions", "profile_visits", "views"]
+_INSIGHT_NUMERIC = [
+    "reach",
+    "reach_follower",
+    "reach_non_follower",
+    "saved",
+    "shares",
+    "total_interactions",
+    "profile_visits",
+    "views",
+]
 
 
 def load_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
@@ -212,7 +221,8 @@ def load_account_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
         return pd.DataFrame()
     result = pd.concat(frames, ignore_index=True)
     result["date"] = pd.to_datetime(result["date"], errors="coerce")
-    for col in ["profile_views", "website_clicks", "reach", "accounts_engaged"]:
+    for col in ["profile_views", "website_clicks", "reach", "accounts_engaged",
+                "reach_follower", "reach_non_follower"]:
         if col in result.columns:
             result[col] = pd.to_numeric(result[col], errors="coerce")
     return result.dropna(subset=["date"]).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
@@ -222,13 +232,17 @@ def merge_insights(df_media: pd.DataFrame, df_insights: pd.DataFrame) -> pd.Data
     """
     メディアデータ（load_media_data）にインサイト列を id で結合する。
     インサイト未取得の投稿は欠損（NaN）のまま残す。
-    保存率 saved_rate（saved/reach）も算出する。
+    保存率 saved_rate（saved/reach）・リーチ基準エンゲージ率 reach_engagement_rate・
+    フォロワー外リーチ比率 non_follower_reach_rate に加え、保存・シェアを含む
+    総エンゲージ率 total_engagement_rate（total_interactions/フォロワー）も算出する。
     """
     if df_media.empty:
         return df_media
     df = df_media.copy()
     if df_insights.empty or "id" not in df.columns:
-        for col in _INSIGHT_NUMERIC + ["saved_rate", "reach_engagement_rate"]:
+        for col in _INSIGHT_NUMERIC + [
+            "saved_rate", "reach_engagement_rate", "non_follower_reach_rate", "total_engagement_rate",
+        ]:
             df[col] = pd.NA
         return df
     df["id"] = df["id"].astype(str)
@@ -243,8 +257,29 @@ def merge_insights(df_media: pd.DataFrame, df_insights: pd.DataFrame) -> pd.Data
             df["comments_count"], errors="coerce"
         ).fillna(0)
         df["reach_engagement_rate"] = (interactions / reach * 100).round(2)
+        # フォロワー外リーチ比率（発見＝新規との出会いの指標）
+        if "reach_non_follower" in df.columns:
+            df["non_follower_reach_rate"] = (
+                pd.to_numeric(df["reach_non_follower"], errors="coerce") / reach * 100
+            ).round(2)
+            df.loc[~(reach > 0), "non_follower_reach_rate"] = pd.NA
         # reach が無効な行は率も無効に
         df.loc[~(reach > 0), ["saved_rate", "reach_engagement_rate"]] = pd.NA
+
+    # 総エンゲージ率（保存・シェア含む）= total_interactions / 投稿時点フォロワー × 100。
+    # total_interactions（Meta公式: いいね+コメント+保存+シェア）が取れない投稿は
+    # 基本ER（いいね+コメント）にフォールバックして全投稿で値が出るようにする。
+    if "followers_at_post" in df.columns:
+        followers = pd.to_numeric(df["followers_at_post"], errors="coerce")
+        basic = pd.to_numeric(df["like_count"], errors="coerce").fillna(0) + pd.to_numeric(
+            df["comments_count"], errors="coerce"
+        ).fillna(0)
+        ti = pd.to_numeric(df.get("total_interactions"), errors="coerce")
+        numerator = ti.where(ti.notna(), basic)
+        df["total_engagement_rate"] = (numerator / followers * 100).round(2)
+        df.loc[~(followers > 0), "total_engagement_rate"] = pd.NA
+    else:
+        df["total_engagement_rate"] = pd.NA
     return df
 
 
