@@ -6,9 +6,11 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from data_loader import (DAY_JA, load_competitor_data, load_hashtag_data,
-                         load_media_data, load_profile_data,
-                         merge_follower_at_post_date)
+from data_loader import (DAY_JA, load_account_insights_data,
+                         load_competitor_data, load_hashtag_data,
+                         load_insights_data, load_media_data,
+                         load_profile_data, merge_follower_at_post_date,
+                         merge_insights)
 from insights import build_summary
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "result")
@@ -42,12 +44,24 @@ def load_all_data():
     df_media = load_media_data(RESULT_DIR)
     if not df_media.empty and not df_profile.empty:
         df_media = merge_follower_at_post_date(df_media, df_profile)
+    # インサイト（リーチ・保存・シェアなど）を id で結合
+    df_insights = load_insights_data(RESULT_DIR)
+    if not df_media.empty:
+        df_media = merge_insights(df_media, df_insights)
+    df_account_insights = load_account_insights_data(RESULT_DIR)
     df_competitors = load_competitor_data(RESULT_DIR)
     df_hashtags = load_hashtag_data(RESULT_DIR)
-    return df_profile, df_media, df_competitors, df_hashtags
+    return df_profile, df_media, df_competitors, df_hashtags, df_account_insights
 
 
-df_profile, df_media, df_competitors, df_hashtags = load_all_data()
+df_profile, df_media, df_competitors, df_hashtags, df_account_insights = load_all_data()
+
+# インサイト列が存在し、かつ実データがあるか
+HAS_INSIGHTS = (
+    not df_media.empty
+    and "reach" in df_media.columns
+    and df_media["reach"].notna().any()
+)
 
 # -------- サイドバー --------
 with st.sidebar:
@@ -114,6 +128,33 @@ else:
 
 c4.metric("📸 表示中の投稿数", f"{len(df_f):,}件")
 
+# -------- インサイトKPIカード（リーチ・保存・シェア・プロフィールアクセス） --------
+if HAS_INSIGHTS:
+    df_ins = df_f[df_f["reach"].notna()] if "reach" in df_f.columns else pd.DataFrame()
+    ic1, ic2, ic3, ic4 = st.columns(4)
+    if not df_ins.empty:
+        ic1.metric("👀 平均リーチ", f"{df_ins['reach'].mean():,.0f}")
+        ic2.metric("🔖 平均保存数", f"{df_ins['saved'].mean():,.1f}")
+        ic3.metric("🔁 平均シェア数", f"{df_ins['shares'].mean():,.1f}")
+    else:
+        ic1.metric("👀 平均リーチ", "—")
+        ic2.metric("🔖 平均保存数", "—")
+        ic3.metric("🔁 平均シェア数", "—")
+    # 直近のアカウント全体インサイト（プロフィールアクセス）
+    if not df_account_insights.empty:
+        last = df_account_insights.iloc[-1]
+        ic4.metric(
+            "🏠 プロフィールアクセス（直近）",
+            f"{int(last['profile_views']):,}",
+            help=f"リンククリック {int(last['website_clicks'])} 回 / {last['date'].strftime('%m月%d日')} 時点",
+        )
+    else:
+        ic4.metric("🏠 プロフィールアクセス（直近）", "—")
+    st.caption(
+        f"※ インサイトは直近 {int(df_media['reach'].notna().sum())} 件の投稿で取得済み"
+        "（`python src/collect_insights.py` で更新）"
+    )
+
 st.divider()
 
 # -------- Section 1: フォロワー推移 --------
@@ -153,6 +194,12 @@ if not df_f.empty:
             "engagement_rate": "📊 エンゲージメント率が高い順",
             "timestamp_jst": "🕐 新しい投稿順",
         }
+        if HAS_INSIGHTS:
+            sort_options.update({
+                "reach": "👀 リーチが多い順",
+                "saved": "🔖 保存数が多い順",
+                "shares": "🔁 シェア数が多い順",
+            })
         sort_col = st.selectbox(
             "並べ替え",
             options=list(sort_options.keys()),
@@ -186,6 +233,13 @@ if not df_f.empty:
                 if "engagement_rate" in posts.columns and pd.notna(row.get("engagement_rate")):
                     eng_str = f"　📊 {row['engagement_rate']:.1f}%"
                 st.caption(f"❤️ {int(row['like_count']):,}　💬 {int(row['comments_count']):,}{eng_str}")
+
+                # インサイトがあれば2行目に表示
+                if HAS_INSIGHTS and pd.notna(row.get("reach")):
+                    ins_parts = [f"👀 {int(row['reach']):,}", f"🔖 {int(row['saved'])}", f"🔁 {int(row['shares'])}"]
+                    if pd.notna(row.get("views")):
+                        ins_parts.append(f"▶️ {int(row['views']):,}")
+                    st.caption("　".join(ins_parts))
 
     st.caption("※ Instagram のCDN画像は有効期限があります。古い投稿は表示されない場合があります。")
 else:
@@ -293,6 +347,70 @@ if not df_f.empty:
             st.plotly_chart(fig5, use_container_width=True)
 
 st.divider()
+
+# -------- Section 3.5: リーチ・保存分析（インサイトがある場合のみ） --------
+if HAS_INSIGHTS:
+    df_ri = df_f[df_f["reach"].notna()].copy() if "reach" in df_f.columns else pd.DataFrame()
+    if not df_ri.empty:
+        st.subheader("👀 リーチ・保存分析")
+        st.caption("インサイト取得済みの投稿のみが対象です。")
+
+        tab_r1, tab_r2, tab_r3 = st.tabs(["📈 リーチ推移", "🔖 保存率ランキング", "📸 タイプ別リーチ"])
+
+        with tab_r1:
+            df_ri_sorted = df_ri.sort_values("timestamp_jst")
+            df_ri_sorted["type_ja"] = df_ri_sorted["media_type"].map(MEDIA_TYPE_JA).fillna(df_ri_sorted["media_type"])
+            fig_r = px.bar(
+                df_ri_sorted,
+                x="timestamp_jst",
+                y="reach",
+                color="type_ja",
+                labels={"timestamp_jst": "投稿日時", "reach": "リーチ数", "type_ja": "タイプ"},
+                color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
+            )
+            fig_r.update_layout(plot_bgcolor="white", yaxis=dict(gridcolor="#f5f5f5"), margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig_r, use_container_width=True)
+
+        with tab_r2:
+            st.markdown("**保存率（保存数 ÷ リーチ）が高い投稿 TOP10**　— 保存される＝あとで見返したい良コンテンツ")
+            top_saved = df_ri[df_ri["saved_rate"].notna()].sort_values("saved_rate", ascending=False).head(10)
+            if not top_saved.empty:
+                disp = top_saved[["timestamp_jst", "media_type", "reach", "saved", "saved_rate", "like_count"]].copy()
+                disp["timestamp_jst"] = disp["timestamp_jst"].dt.strftime("%Y/%m/%d")
+                disp["media_type"] = disp["media_type"].map(MEDIA_TYPE_JA).fillna(disp["media_type"])
+                disp.columns = ["投稿日", "タイプ", "リーチ", "保存数", "保存率(%)", "いいね"]
+                st.dataframe(disp, use_container_width=True, hide_index=True)
+            else:
+                st.info("保存率データがありません")
+
+        with tab_r3:
+            type_ins = (
+                df_ri.groupby("media_type")
+                .agg(平均リーチ=("reach", "mean"), 平均保存数=("saved", "mean"), 投稿数=("reach", "count"))
+                .reset_index()
+            )
+            type_ins["タイプ"] = type_ins["media_type"].map(MEDIA_TYPE_JA).fillna(type_ins["media_type"])
+            type_ins["平均リーチ"] = type_ins["平均リーチ"].round(0)
+            type_ins["平均保存数"] = type_ins["平均保存数"].round(1)
+            col_ra, col_rb = st.columns(2)
+            with col_ra:
+                fig_ra = px.bar(
+                    type_ins, x="タイプ", y="平均リーチ", text="平均リーチ", color="タイプ",
+                    color_discrete_sequence=list(MEDIA_TYPE_COLOR.values()), title="タイプ別 平均リーチ",
+                )
+                fig_ra.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+                fig_ra.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
+                st.plotly_chart(fig_ra, use_container_width=True)
+            with col_rb:
+                fig_rb = px.bar(
+                    type_ins, x="タイプ", y="平均保存数", text="平均保存数", color="タイプ",
+                    color_discrete_sequence=list(MEDIA_TYPE_COLOR.values()), title="タイプ別 平均保存数",
+                )
+                fig_rb.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+                fig_rb.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
+                st.plotly_chart(fig_rb, use_container_width=True)
+
+        st.divider()
 
 # -------- Section 4: ハッシュタグ分析 --------
 st.subheader("🔖 ハッシュタグ分析")

@@ -145,6 +145,109 @@ def load_hashtag_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+_INSIGHT_NUMERIC = ["reach", "saved", "shares", "total_interactions", "profile_visits", "views"]
+
+
+def load_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
+    """
+    result/insights/ の全 *_media_insights_*.csv を統合し、id ごとに最新値を残して返す。
+
+    日次で直近N件のみ収集しても、過去に --all で取得した全履歴のカバレッジが
+    失われないよう、古い→新しい順に統合し、id ごとに「最新の非欠損値」を採用する。
+    （ファイル名末尾が YYYY-MM-DD のため sorted で古い→新しい順になり、
+    　groupby.last() がグループ内の最新の非NULL値を返す。）
+
+    Returns
+    -------
+    pd.DataFrame
+        投稿ID別インサイト（id, reach, saved, shares, total_interactions, profile_visits, views）。
+        データが無い場合は空のDataFrame。
+    """
+    ins_dir = os.path.join(result_dir, "insights")
+    files = sorted(glob.glob(os.path.join(ins_dir, "*_media_insights_*.csv")))
+    if not files:
+        return pd.DataFrame()
+    frames = []
+    for f in files:
+        try:
+            df = pd.read_csv(f)
+        except Exception:
+            continue
+        if df.empty or "id" not in df.columns:
+            continue
+        df["id"] = df["id"].astype(str)
+        for col in _INSIGHT_NUMERIC:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    # id ごとに最新の非欠損値を採用（古い→新しい順なので last が最新値）
+    return combined.groupby("id", as_index=False).last()
+
+
+def load_account_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
+    """
+    result/insights/ の全 *_account_insights_*.csv を読み込み、日次推移として返す。
+
+    Returns
+    -------
+    pd.DataFrame
+        date, profile_views, website_clicks, reach, accounts_engaged の日次データ。
+    """
+    ins_dir = os.path.join(result_dir, "insights")
+    files = sorted(glob.glob(os.path.join(ins_dir, "*_account_insights_*.csv")))
+    if not files:
+        return pd.DataFrame()
+    frames = []
+    for f in files:
+        try:
+            df = pd.read_csv(f)
+            if not df.empty:
+                frames.append(df)
+        except Exception:
+            continue
+    if not frames:
+        return pd.DataFrame()
+    result = pd.concat(frames, ignore_index=True)
+    result["date"] = pd.to_datetime(result["date"], errors="coerce")
+    for col in ["profile_views", "website_clicks", "reach", "accounts_engaged"]:
+        if col in result.columns:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+    return result.dropna(subset=["date"]).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
+def merge_insights(df_media: pd.DataFrame, df_insights: pd.DataFrame) -> pd.DataFrame:
+    """
+    メディアデータ（load_media_data）にインサイト列を id で結合する。
+    インサイト未取得の投稿は欠損（NaN）のまま残す。
+    保存率 saved_rate（saved/reach）も算出する。
+    """
+    if df_media.empty:
+        return df_media
+    df = df_media.copy()
+    if df_insights.empty or "id" not in df.columns:
+        for col in _INSIGHT_NUMERIC + ["saved_rate", "reach_engagement_rate"]:
+            df[col] = pd.NA
+        return df
+    df["id"] = df["id"].astype(str)
+    ins_cols = ["id"] + [c for c in _INSIGHT_NUMERIC if c in df_insights.columns]
+    df = df.merge(df_insights[ins_cols], on="id", how="left")
+    # リーチベースの指標を算出（reach が 0/NaN の場合は計算しない）
+    if "reach" in df.columns:
+        reach = pd.to_numeric(df["reach"], errors="coerce")
+        if "saved" in df.columns:
+            df["saved_rate"] = (pd.to_numeric(df["saved"], errors="coerce") / reach * 100).round(2)
+        interactions = pd.to_numeric(df["like_count"], errors="coerce").fillna(0) + pd.to_numeric(
+            df["comments_count"], errors="coerce"
+        ).fillna(0)
+        df["reach_engagement_rate"] = (interactions / reach * 100).round(2)
+        # reach が無効な行は率も無効に
+        df.loc[~(reach > 0), ["saved_rate", "reach_engagement_rate"]] = pd.NA
+    return df
+
+
 def merge_follower_at_post_date(df_media: pd.DataFrame, df_profile: pd.DataFrame) -> pd.DataFrame:
     if df_profile.empty or df_media.empty:
         df_media["followers_at_post"] = None
