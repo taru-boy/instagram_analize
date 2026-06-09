@@ -6,20 +6,18 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from data_loader import (DAY_JA, load_account_insights_data,
-                         load_competitor_data, load_hashtag_data,
-                         load_insights_data, load_media_data,
-                         load_profile_data, merge_follower_at_post_date,
-                         merge_insights)
-from insights import build_summary
+from data_loader import (DAY_JA, add_saved_rate_adj,
+                         load_account_insights_data, load_competitor_data,
+                         load_hashtag_data, load_insights_data,
+                         load_media_data, load_profile_data,
+                         load_visual_data, merge_follower_at_post_date,
+                         merge_insights, merge_visual)
+from insights import build_summary, visual_engagement_analysis
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "result")
 
 MEDIA_TYPE_JA = {"IMAGE": "画像", "CAROUSEL_ALBUM": "スライド", "VIDEO": "動画"}
 MEDIA_TYPE_COLOR = {"IMAGE": "#E1306C", "CAROUSEL_ALBUM": "#833AB4", "VIDEO": "#F56040"}
-
-# 保存率ランキング表示専用。分母が極小の古い投稿を除外するパーセンタイル閾値。
-REACH_PERCENTILE_FOR_RATE = 0.75
 
 st.set_page_config(
     page_title="Instagram 分析ダッシュボード",
@@ -51,6 +49,9 @@ def load_all_data():
     df_insights = load_insights_data(RESULT_DIR)
     if not df_media.empty:
         df_media = merge_insights(df_media, df_insights)
+    df_visual = load_visual_data(RESULT_DIR)
+    if not df_media.empty:
+        df_media = merge_visual(df_media, df_visual)
     df_account_insights = load_account_insights_data(RESULT_DIR)
     df_competitors = load_competitor_data(RESULT_DIR)
     df_hashtags = load_hashtag_data(RESULT_DIR)
@@ -141,6 +142,20 @@ def _followers_at(df_profile, when):
 
 def _val(x, fmt):
     return "—" if x is None else fmt(x)
+
+
+# 「質の比較」用の期間プリセット。昔（〜2023）は保存率の地合いが今の約60倍あり、
+# 全期間で比べると古い投稿が上位を独占して「今効く型」が見えなくなるため、
+# 投稿一覧・写真の傾向分析は期間を絞って比較する（既定: 直近12ヶ月）。
+PERIOD_OPTIONS = {3: "直近3ヶ月", 6: "直近6ヶ月", 12: "直近12ヶ月", 24: "直近24ヶ月", None: "全期間"}
+
+
+def _period_window(df, months):
+    """timestamp_jst が直近 months ヶ月以内の行に絞る。months=None なら全期間。"""
+    if months is None or df.empty or "timestamp_jst" not in df.columns:
+        return df
+    cutoff = pd.Timestamp.now() - pd.DateOffset(months=months)
+    return df[df["timestamp_jst"] >= cutoff]
 
 
 def _account_nf_rate(df_ai, anchor, days=30, offset=0):
@@ -281,14 +296,14 @@ with tab_home:
     )
 
     if not df_media.empty:
-        ctrl_l, ctrl_r = st.columns([3, 1])
+        ctrl_l, ctrl_m, ctrl_r = st.columns([2, 1, 1])
         with ctrl_l:
             if HAS_INSIGHTS:
                 sort_options = {
+                    "saved_rate_adj": "🔖 保存率（調整済み・低リーチ補正）が高い順",
                     "saved": "🔖 保存数が多い順",
                     "reach": "👀 リーチが多い順",
                     "shares": "🔁 シェア数が多い順",
-                    "saved_rate": "🔖 保存率が高い順（参考・リーチ小に偏りやすい）",
                     "like_count": "❤️ いいね数が多い順",
                     "comments_count": "💬 コメント数が多い順",
                     "total_engagement_rate": "📊 エンゲージ率（保存・シェア込）が高い順",
@@ -307,17 +322,30 @@ with tab_home:
                 options=list(sort_options.keys()),
                 format_func=lambda x: sort_options[x],
             )
+        with ctrl_m:
+            period_months = st.selectbox(
+                "対象期間",
+                options=list(PERIOD_OPTIONS.keys()),
+                format_func=lambda x: PERIOD_OPTIONS[x],
+                index=2,  # 既定: 直近12ヶ月
+                help="昔（〜2023年）は保存率の地合いが今の約60倍。全期間だと古い投稿が上位を独占するため、"
+                     "「今効く型」を見るには期間を絞って比較します。",
+            )
         with ctrl_r:
             n_show = st.select_slider("表示件数", options=[6, 9, 12, 18, 24, 30], value=12)
 
-        df_to_sort = df_media
-        if sort_col == "saved_rate" and "reach" in df_media.columns and df_media["reach"].notna().any():
-            reach_floor = df_media["reach"].quantile(REACH_PERCENTILE_FOR_RATE)
-            pct_label = int(round((1 - REACH_PERCENTILE_FOR_RATE) * 100))
-            df_to_sort = df_media[df_media["reach"] >= reach_floor]
-            st.caption(f"保存率順はリーチ上位{pct_label}%（{reach_floor:.0f}以上）の投稿のみを対象にしています。")
+        # 期間で絞り、その期間の地合い（m・C）で調整保存率を再計算する
+        df_list = _period_window(df_media, period_months)
+        if HAS_INSIGHTS:
+            df_list = add_saved_rate_adj(df_list)
 
-        df_sorted = df_to_sort.sort_values(sort_col, ascending=False, na_position="last")
+        if sort_col == "saved_rate_adj":
+            st.caption(
+                f"調整保存率＝(保存+m×C)/(リーチ+C)。リーチが小さい投稿の保存率を**{PERIOD_OPTIONS[period_months]}の平均**へ"
+                "補正し、まぐれの高保存率に上位を占有されないようにしています（m・Cはこの期間で再計算）。"
+            )
+
+        df_sorted = df_list.sort_values(sort_col, ascending=False, na_position="last")
         posts = df_sorted.head(n_show).reset_index(drop=True)
 
         for i in range(0, len(posts), 5):
@@ -506,14 +534,13 @@ with tab_trend:
 with tab_detail:
     st.subheader("📊 詳しい分析")
     st.caption(
-        "インサイト取得済みの投稿のみが対象です。"
-        "将来は画像の数値解析結果もここに追加予定（構図・色・被写体 × 保存/リーチ）。"
+        "インサイト取得済みの投稿のみが対象です（写真の傾向タブは視覚特徴がある投稿が対象）。"
     )
 
     df_ri = df_media[df_media["reach"].notna()].copy() if HAS_INSIGHTS and "reach" in df_media.columns else pd.DataFrame()
 
-    d_tab1, d_tab2, d_tab3, d_tab4 = st.tabs(
-        ["📌 タイプ別の効き目", "🗓️ 投稿タイミング", "📈 リーチ・発見の推移", "🔖 ハッシュタグ"]
+    d_tab1, d_tab2, d_tab3, d_tab4, d_tab5 = st.tabs(
+        ["📌 タイプ別の効き目", "🗓️ 投稿タイミング", "📈 リーチ・発見の推移", "🔖 ハッシュタグ", "🎨 写真の傾向"]
     )
 
     # --- タイプ別の効き目 ---
@@ -731,6 +758,88 @@ with tab_detail:
                 st.info("ハッシュタグデータがありません")
         else:
             st.info("投稿データがありません")
+
+    # --- 写真の傾向（視覚特徴 × エンゲージ） ---
+    with d_tab5:
+        period_v = st.selectbox(
+            "対象期間",
+            options=list(PERIOD_OPTIONS.keys()),
+            format_func=lambda x: PERIOD_OPTIONS[x],
+            index=2,  # 既定: 直近12ヶ月
+            key="visual_period",
+            help="保存率の地合いは年々大きく下がっているため、昔と今を混ぜると傾向がぼやけます。"
+                 "「今効く見た目」を見るには直近に絞ってください。",
+        )
+        df_vis = _period_window(df_media, period_v)
+        df_vis = add_saved_rate_adj(df_vis)  # その期間の地合いで再正規化
+        va = visual_engagement_analysis(df_vis)
+        if va and (va.get("features") or va.get("dominant_color")):
+            metric_label = va.get("metric_label", "エンゲージ")
+            st.markdown(
+                f"**写真の見え方 × {metric_label}**　— どんな絵が刺さるか"
+                f"（{PERIOD_OPTIONS[period_v]}・{va.get('n', 0)}件の投稿が対象）"
+            )
+            st.caption(
+                "各特徴を投稿を5分位（最低/低/中/高/最高）に分け、帯ごとの平均を比較しています。"
+                "色みや明るさを機械的に測ったもので、モチーフ（何が描かれているか）は対象外です。"
+            )
+
+            BAND_ORDER = ["最低", "低", "中", "高", "最高"]
+            feats = va.get("features", {})
+            feat_keys = list(feats.keys())
+            for i in range(0, len(feat_keys), 3):
+                cols_v = st.columns(3)
+                for j in range(3):
+                    if i + j >= len(feat_keys):
+                        break
+                    key = feat_keys[i + j]
+                    info = feats[key]
+                    dfb = pd.DataFrame(info["ranking"])
+                    dfb["band"] = pd.Categorical(dfb["band"], categories=BAND_ORDER, ordered=True)
+                    dfb = dfb.sort_values("band")
+                    with cols_v[j]:
+                        fig_v = px.bar(
+                            dfb, x="band", y="avg", text="avg",
+                            labels={"band": info["label"], "avg": f"平均{metric_label}"},
+                            title=info["label"],
+                            color="band",
+                            color_discrete_sequence=["#c5cae9", "#9fa8da", "#7986cb", "#5c6bc0", "#E1306C"],
+                        )
+                        fig_v.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+                        fig_v.update_layout(
+                            plot_bgcolor="white", showlegend=False,
+                            margin=dict(l=0, r=0, t=40, b=0), height=260,
+                        )
+                        st.plotly_chart(fig_v, use_container_width=True)
+
+            dc = va.get("dominant_color") or {}
+            if dc.get("ranking"):
+                st.markdown(f"**主要色（画面で一番面積を占める色相）× 平均{metric_label}**")
+                dfc = pd.DataFrame(dc["ranking"])
+                fig_c = px.bar(
+                    dfc, x="color", y="avg", text="avg",
+                    labels={"color": "主要色", "avg": f"平均{metric_label}"},
+                    color="avg", color_continuous_scale="RdPu",
+                )
+                fig_c.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+                fig_c.update_layout(
+                    plot_bgcolor="white", coloraxis_showscale=False,
+                    margin=dict(l=0, r=0, t=10, b=0), height=320,
+                )
+                st.plotly_chart(fig_c, use_container_width=True)
+            st.caption(
+                "※ 件数が少ない帯は参考程度に。IGの表示画像（中央クロップされることあり）を基準にしています。"
+            )
+        elif "brightness" in df_media.columns and df_media["brightness"].notna().any():
+            st.info(
+                f"この期間（{PERIOD_OPTIONS[period_v]}）は分析に十分な投稿がありません。"
+                "対象期間を広げてください（5分位の集計には10件程度必要です）。"
+            )
+        else:
+            st.info(
+                "💡 `python src/collect_visual.py` を実行すると、写真の色み・明るさ・余白などを"
+                "数値化し、どんな見た目の作品が伸びるかを分析できます（API課金なし）。"
+            )
 
 # ========================================
 # タブ4: 投稿アイデア

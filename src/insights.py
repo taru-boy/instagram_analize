@@ -5,12 +5,72 @@ import pandas as pd
 
 MEDIA_TYPE_JA = {"IMAGE": "画像", "CAROUSEL_ALBUM": "スライド", "VIDEO": "動画"}
 
+# 視覚特徴（collect_visual.py / data_loader.merge_visual が付与）の日本語ラベル。
+# 値の大小に意味がある連続特徴のみ（dominant_color はカテゴリなので別扱い）。
+VISUAL_NUMERIC_FEATURES = {
+    "brightness": "明るさ",
+    "saturation": "彩度",
+    "contrast": "コントラスト",
+    "colorfulness": "色の豊かさ",
+    "warm_ratio": "暖色の多さ",
+    "whitespace_ratio": "余白の多さ",
+    "edge_density": "描き込み量",
+    "palette_size": "色数",
+    "sharpness": "鮮明さ",
+}
+
 
 def _engagement_col(df: pd.DataFrame) -> str:
     """エンゲージメント率があればそれを、なければ like_count を指標に使う。"""
     if "engagement_rate" in df.columns and df["engagement_rate"].notna().any():
         return "engagement_rate"
     return "like_count"
+
+
+def _visual_engagement_col(df: pd.DataFrame) -> tuple:
+    """
+    視覚分析で使う指標列とラベルを返す。作品販売の北極星である保存率を優先し、
+    低リーチ補正済みのベイズ調整保存率があれば最優先で使う
+    （無ければ生の保存率 → 基本ER → いいね数にフォールバック）。
+    """
+    if "saved_rate_adj" in df.columns and df["saved_rate_adj"].notna().any():
+        return "saved_rate_adj", "調整保存率"
+    if "saved_rate" in df.columns and df["saved_rate"].notna().any():
+        return "saved_rate", "保存率"
+    if "engagement_rate" in df.columns and df["engagement_rate"].notna().any():
+        return "engagement_rate", "エンゲージ率"
+    return "like_count", "いいね数"
+
+
+QUINTILE_LABELS = ["最低", "低", "中", "高", "最高"]
+
+
+def _quantile_engagement(values: pd.Series, eng: pd.Series, min_count: int = 2) -> list:
+    """
+    連続値を5分位（最低/低/中/高/最高）に分け、帯ごとの平均エンゲージと件数を平均の降順で返す。
+    データが少ない・値が偏って分割できない場合は空リスト。
+    """
+    work = pd.DataFrame({"_v": pd.to_numeric(values, errors="coerce"), "_e": eng}).dropna()
+    if len(work) < 10:
+        return []
+    try:
+        work["_band"] = pd.qcut(work["_v"], 5, labels=QUINTILE_LABELS, duplicates="drop")
+    except Exception:
+        return []
+    work = work.dropna(subset=["_band"])
+    if work["_band"].nunique() < 2:
+        return []
+    grp = (
+        work.groupby("_band", observed=True)
+        .agg(avg=("_e", "mean"), count=("_e", "count"))
+        .reset_index()
+    )
+    grp = grp[grp["count"] >= min_count]
+    if grp.empty:
+        return []
+    grp["band"] = grp["_band"].astype(str)
+    grp = grp.sort_values("avg", ascending=False)
+    return grp[["band", "avg", "count"]].round(2).to_dict("records")
 
 
 def best_posting_slots(df_media: pd.DataFrame, top_n: int = 3, min_count: int = 2) -> list:
@@ -333,6 +393,76 @@ def competitor_gap(
     }
 
 
+def visual_engagement_analysis(df_media: pd.DataFrame) -> dict:
+    """
+    投稿画像の視覚特徴（collect_visual.py 由来）とエンゲージメントの関係を集計する。
+
+    指標は保存率を優先（無ければエンゲージ率→いいね数）。連続特徴は5分位（最低/低/中/高/最高）の
+    帯別平均、dominant_color はカテゴリ別平均をランキングで返す。視覚特徴が無ければ空 dict。
+
+    Returns
+    -------
+    dict
+        {
+          "metric": 使用した指標列名, "metric_label": 日本語ラベル, "n": 対象投稿数,
+          "features": {feature: {"label", "ranking":[{band,avg,count}], "best_band"}},
+          "dominant_color": {"ranking":[{color,avg,count}], "best": color},
+        }
+    """
+    if df_media.empty:
+        return {}
+    has_numeric = any(
+        f in df_media.columns and df_media[f].notna().any() for f in VISUAL_NUMERIC_FEATURES
+    )
+    has_color = "dominant_color" in df_media.columns and df_media["dominant_color"].notna().any()
+    if not has_numeric and not has_color:
+        return {}
+
+    metric, metric_label = _visual_engagement_col(df_media)
+    eng = pd.to_numeric(df_media[metric], errors="coerce")
+    # 視覚特徴を持つ行（数値特徴のいずれか or dominant_color が非欠損）
+    has_visual = pd.Series(False, index=df_media.index)
+    for f in list(VISUAL_NUMERIC_FEATURES) + ["dominant_color"]:
+        if f in df_media.columns:
+            has_visual = has_visual | df_media[f].notna()
+    valid = eng.notna() & has_visual
+    n = int(valid.sum())
+
+    features = {}
+    for feat, label in VISUAL_NUMERIC_FEATURES.items():
+        if feat not in df_media.columns:
+            continue
+        ranking = _quantile_engagement(df_media.loc[valid, feat], eng[valid])
+        if ranking:
+            features[feat] = {"label": label, "ranking": ranking, "best_band": ranking[0]["band"]}
+
+    color = {}
+    if has_color:
+        work = pd.DataFrame(
+            {"color": df_media.loc[valid, "dominant_color"], "_e": eng[valid]}
+        ).dropna()
+        if not work.empty:
+            grp = (
+                work.groupby("color")
+                .agg(avg=("_e", "mean"), count=("_e", "count"))
+                .reset_index()
+            )
+            grp = grp[grp["count"] >= 2].sort_values("avg", ascending=False)
+            if not grp.empty:
+                ranking = grp.round(2).to_dict("records")
+                color = {"ranking": ranking, "best": ranking[0]["color"]}
+
+    if not features and not color:
+        return {}
+    return {
+        "metric": metric,
+        "metric_label": metric_label,
+        "n": n,
+        "features": features,
+        "dominant_color": color,
+    }
+
+
 def actionable_advice(
     df_media: pd.DataFrame,
     df_competitors: pd.DataFrame = None,
@@ -356,27 +486,34 @@ def actionable_advice(
     if "reach" in df_media.columns and df_media["reach"].notna().any():
         ins = df_media[df_media["reach"].notna()]
 
-        # 保存率（北極星指標）を上げる
-        if "saved_rate" in ins.columns and ins["saved_rate"].notna().any():
-            mean_sr = float(ins["saved_rate"].mean())
-            if mean_sr < 1.0:
-                advice.append(
-                    f"保存率は平均{mean_sr:.2f}%（目安は1%超）。作品の制作背景やモチーフの物語を"
-                    "キャプションに添え、「保存して見返してね」と一言入れると、おすすめ拡散の核となる"
-                    "保存が伸びます。"
+        # 保存率（北極星指標）を上げる。全体平均はリーチ加重 Σ保存/Σリーチ で算出（低リーチ偏りを避ける）。
+        if "saved" in ins.columns and ins["saved"].notna().any():
+            _saved = pd.to_numeric(ins["saved"], errors="coerce")
+            _reach = pd.to_numeric(ins["reach"], errors="coerce")
+            _m = _saved.notna() & (_reach > 0)
+            if _m.any() and _reach[_m].sum() > 0:
+                mean_sr = float(_saved[_m].sum() / _reach[_m].sum() * 100)
+                if mean_sr < 1.0:
+                    advice.append(
+                        f"保存率は平均{mean_sr:.2f}%（目安は1%超）。作品の制作背景やモチーフの物語を"
+                        "キャプションに添え、「保存して見返してね」と一言入れると、おすすめ拡散の核となる"
+                        "保存が伸びます。"
+                    )
+            # タイプ別比較は低リーチ補正済みの調整保存率を優先（無ければ生の保存率）
+            sr_col = "saved_rate_adj" if "saved_rate_adj" in ins.columns and ins["saved_rate_adj"].notna().any() else "saved_rate"
+            if sr_col in ins.columns and ins[sr_col].notna().any():
+                sr_by_type = (
+                    ins.dropna(subset=[sr_col])
+                    .groupby("media_type")[sr_col]
+                    .agg(["mean", "count"])
                 )
-            sr_by_type = (
-                ins.dropna(subset=["saved_rate"])
-                .groupby("media_type")["saved_rate"]
-                .agg(["mean", "count"])
-            )
-            sr_by_type = sr_by_type[sr_by_type["count"] >= 2].sort_values("mean", ascending=False)
-            if len(sr_by_type) >= 2:
-                top_t = sr_by_type.index[0]
-                advice.append(
-                    f"保存率が最も高いのは「{MEDIA_TYPE_JA.get(top_t, top_t)}」"
-                    f"（平均{sr_by_type.iloc[0]['mean']:.2f}%）。この型を増やすと保存が積み上がります。"
-                )
+                sr_by_type = sr_by_type[sr_by_type["count"] >= 2].sort_values("mean", ascending=False)
+                if len(sr_by_type) >= 2:
+                    top_t = sr_by_type.index[0]
+                    advice.append(
+                        f"保存率が最も高いのは「{MEDIA_TYPE_JA.get(top_t, top_t)}」"
+                        f"（平均{sr_by_type.iloc[0]['mean']:.2f}%）。この型を増やすと保存が積み上がります。"
+                    )
 
         # リール（動画）で新規の発見＝フォロワー外リーチを稼ぐ
         reach_by_type = ins.groupby("media_type")["reach"].mean()
@@ -398,6 +535,36 @@ def actionable_advice(
                     f"投稿あたり平均{pv:,.1f}人がプロフィールに来ています。ハイライトに"
                     "「販売中／お問い合わせ／制作の流れ」を固定し、リンクと料金を明記すると受注につながります。"
                 )
+
+    # 0.5 写真の見え方（視覚特徴）→ 保存/エンゲージ。画像こそ作品アカウントの主役。
+    va = visual_engagement_analysis(df_media)
+    if va:
+        label = va["metric_label"]
+        # 帯間の差が最も大きく、方向（高/低）が明確な連続特徴を1つ選んで助言
+        best = None
+        for info in va.get("features", {}).values():
+            rk = info["ranking"]
+            top = rk[0]
+            if top["band"] not in ("最高", "高", "低", "最低") or len(rk) < 2:
+                continue
+            lo = rk[-1]["avg"]
+            if lo > 0 and top["avg"] >= lo * 1.2 and (best is None or top["avg"] / lo > best[0]):
+                best = (top["avg"] / lo, info, top, rk[-1])
+        if best:
+            _, info, top, worst = best
+            dir_word = "高め" if top["band"] in ("最高", "高") else "控えめ"
+            advice.append(
+                f"写真の傾向: 「{info['label']}」が{dir_word}の投稿ほど{label}が高めです"
+                f"（{top['band']}={top['avg']} / {worst['band']}={worst['avg']}）。"
+                "次の作品でこの方向を意識すると効果的です。"
+            )
+        dc = va.get("dominant_color") or {}
+        if dc.get("ranking") and len(dc["ranking"]) >= 2:
+            t = dc["ranking"][0]
+            advice.append(
+                f"主要色が「{t['color']}」系の作品は{label}が高めです"
+                f"（平均{t['avg']}・{t['count']}件）。配色の参考に。"
+            )
 
     # 1. 伸びるタイプを増やす提案
     types = best_media_type(df_media)
@@ -488,6 +655,7 @@ def build_summary(
         "cadence": posting_cadence(df_media),
         "low_performers": low_performers(df_media),
         "competitor_gap": competitor_gap(df_media, df_competitors),
+        "visual": visual_engagement_analysis(df_media),
         "advice": actionable_advice(df_media, df_competitors, df_hashtags),
         "total_posts": int(len(df_media)),
     }

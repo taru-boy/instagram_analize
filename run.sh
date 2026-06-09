@@ -11,6 +11,11 @@ $BASE_DIR/.venv/bin/python $BASE_DIR/src/collect.py >> $LOG_DIR/collect.log 2>&1
 #     メディア別は直近200件のみ取得（レート制限対策。全件は --all）。
 $BASE_DIR/.venv/bin/python $BASE_DIR/src/collect_insights.py >> $LOG_DIR/insights.log 2>&1
 
+# 投稿画像の視覚特徴収集（色・明るさ・余白など。API課金なし）
+#   ※ collect.py の後に実行。直近200件のうち未処理のみ取得（増分）。
+#     CDN URL は期限切れで消えるため、取れるうちに蓄積しておく。
+$BASE_DIR/.venv/bin/python $BASE_DIR/src/collect_visual.py >> $LOG_DIR/visual.log 2>&1
+
 # 競合アカウントの収集（毎回でも可。Business Discovery のレート制限に注意）
 # $BASE_DIR/.venv/bin/python $BASE_DIR/src/collect_competitors.py >> $LOG_DIR/competitors.log 2>&1
 

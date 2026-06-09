@@ -14,6 +14,7 @@ Instagram投稿データ収集・分析ツール。Facebook Graph API の Busine
 ├── src/
 │   ├── collect.py             # データ収集スクリプト（メイン。collect_account()を共有）
 │   ├── collect_insights.py    # インサイト収集（リーチ・保存・シェア・プロフィールアクセス等）
+│   ├── collect_visual.py      # 投稿画像の軽量視覚特徴収集（色・明るさ・余白・描き込み量等。API課金なし）
 │   ├── collect_competitors.py # 競合アカウント収集（collect.pyの関数を再利用）
 │   ├── collect_hashtags.py    # ハッシュタグ人気投稿収集（IG Hashtag Search）
 │   ├── data_loader.py         # CSV読み込み・データ変換ロジック
@@ -58,6 +59,7 @@ TREND_HASHTAGS=水彩画,イラスト,アート  # トレンド収集タグ（�
 # プロジェクトルートから実行
 python src/collect.py              # 妻アカウントの収集
 python src/collect_insights.py     # インサイト収集（直近200件。--all で全件、--limit Nで件数指定、--no-breakdown でフォロワー外リーチ分解を省略）
+python src/collect_visual.py       # 投稿画像の視覚特徴収集（直近200件のうち未処理。--all で全件、--limit Nで件数指定、--force で再計算）
 python src/collect_competitors.py  # 競合アカウントの収集
 python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 ```
@@ -67,6 +69,7 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - `{TARGET_USER_ID}_{today}.csv` — 投稿一覧（**id**・メディアURL・キャプション・ハッシュタグ・いいね数・コメント数・メディアタイプ）
 - `insights/{IG_USER_ID}_media_insights_{today}.csv` — 投稿ID別インサイト（reach/**reach_follower/reach_non_follower**/saved/shares/total_interactions/profile_visits/views）
 - `insights/{IG_USER_ID}_account_insights_{today}.csv` — アカウント日次インサイト（profile_views/website_clicks/reach/accounts_engaged/**reach_follower/reach_non_follower**）
+- `visual/{TARGET_USER_ID}_visual_{today}.csv` — 投稿ID別の視覚特徴（brightness/saturation/contrast/colorfulness/warm_ratio/**dominant_color**/whitespace_ratio/edge_density/palette_size/sharpness）。画像ファイルは保存せず数値特徴のみキャッシュ
 - `competitors/{username}-profile-{today}.csv` / `competitors/{username}_{today}.csv` — 競合のプロフィール・投稿
 - `hashtags/{tag}_{today}.csv` — タグ別の人気投稿（top_media）
 - `suggestions/{today}.json` — AI生成の投稿案キャッシュ（同日は再課金しない）
@@ -98,6 +101,20 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - レート制限対策：デフォルトは直近200件のみ。`--all` で全件、`--limit N` で件数指定、`--sleep` でウェイト調整。
   **breakdown 有効時はメディア1件あたり2リクエストになる**ため、件数が多い場合は `--no-breakdown` か `--limit` を併用。
 
+### 視覚特徴収集（`src/collect_visual.py`）
+
+- **「写真そのもの」をローカルで数値化**する（Claude/API は使わず課金なし）。画家＝作品販売アカウントでは
+  色・明るさ・余白・描き込み量といった見た目が保存率/リーチを左右するため、`id` ごとに特徴を抽出する。
+- `load_media_data()`（data_loader）で `id`＋`media_url` を取得 → 各画像を `requests` で**メモリにDL**し、
+  PIL で長辺200pxに縮小、numpy で特徴算出。**画像ファイルは保存せず**、抽出後の数値特徴のみ CSV にキャッシュ。
+- `extract_features()` — 計10特徴を返す。色・明るさ系（brightness/saturation/contrast/colorfulness/
+  warm_ratio/dominant_color）＋構造・質感系（whitespace_ratio＝余白率／edge_density＝描き込み量／
+  palette_size＝色数／sharpness＝ラプラシアン分散）。`_rgb_to_hsv()` は vectorized 変換。
+- 既に特徴を持つ `id` はスキップ（増分実行。`_existing_done_ids()`）。`--force` で再計算。
+  同日に複数回実行した場合は既存ファイルと結合して `id` 重複を除く。
+- **IG の CDN URL は期限切れで取得不能**になるため、取れるうちに蓄積する設計（取得失敗は欠損のままスキップ）。
+  デフォルトは直近200件のうち未処理のみ。`--all`／`--limit N`／`--sleep` あり。
+
 ### トレンド収集
 
 - `collect_competitors.py` — `COMPETITOR_USERNAMES` の各アカウントを `collect_account()` で収集。
@@ -112,8 +129,12 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
   `hashtag_count_analysis()`（最適なタグ個数。0個推奨は避ける`best_actionable_band`を提供）・
   `posting_cadence()`（投稿ペース・傾向）・`low_performers()`（避けたい条件）・
   `competitor_gap()`（競合が多用＆未使用のタグ／エンゲージ比較）・
+  `visual_engagement_analysis()`（★視覚特徴×エンゲージ。指標は**調整保存率 `saved_rate_adj` 優先**→生保存率→ER→いいねにフォールバック。
+  連続特徴は5分位（最低/低/中/高/最高）の帯別平均、`dominant_color` はカテゴリ別平均をランキング。`_quantile_engagement()`・
+  `_visual_engagement_col()` を使用。視覚特徴が無ければ空dict）・
   `actionable_advice()`（★上記を総合したルールベースの日本語「次にやるべきこと」助言。インサイトがある場合は
-  保存率を上げる施策・リールでフォロワー外リーチを稼ぐ・プロフィール販売導線の整備を最優先で提示）・
+  保存率を上げる施策・リールでフォロワー外リーチを稼ぐ・プロフィール販売導線の整備を最優先で提示。
+  視覚特徴がある場合は「どんな見た目の作品が刺さるか」も助言）・
   `build_summary()`（一括）。
 - `suggest.py` — 統計サマリ＋高エンゲージ投稿例＋トレンドをプロンプト化し、`claude-opus-4-8` に
   構造化出力（`messages.parse()` + Pydantic）でリクエスト。投稿案3〜5件（テーマ・キャプション案・
@@ -144,9 +165,11 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - **補助KPI（2段目）** — 🆕フォロワー外リーチ比率・👥フォロワー数・💬エンゲージ率・🔁平均シェア数。
 - **集計方式** — 比率KPI（保存率・フォロワー外リーチ比率・エンゲージ率）は**リーチ加重 `sum(分子)/sum(リーチ)`**。
   件数KPI（リーチ・プロフィール訪問・シェア）は投稿あたり平均。ヘルパー: `_window_rate`・`_window_mean`・
-  `_window_engagement_rate`・`_fmt_delta`。`REACH_PERCENTILE_FOR_RATE` は投稿一覧の保存率ソート表示専用。
-- **投稿パフォーマンス一覧** — サムネイル付き、保存数/リーチ/シェア/保存率(参考)/いいね/コメント/総エンゲージ率でソート可
-  （既定は**保存数**）。📊＝総エンゲージ率（保存・シェア込）。保存率ソート時のみリーチ下位を除外。
+  `_window_engagement_rate`・`_fmt_delta`。ホームKPIの保存率はリーチ加重のため低リーチ偏りは無い。
+- **投稿パフォーマンス一覧** — サムネイル付き、**調整保存率/保存数/リーチ/シェア/いいね/コメント/総エンゲージ率**でソート可
+  （HAS_INSIGHTS時の既定は**🔖調整保存率 `saved_rate_adj`**＝低リーチ補正済みで「中身の質」を公平に比較）。📊＝総エンゲージ率（保存・シェア込）。
+  ※生の `saved_rate` ソートとリーチ下位足切り（旧 `REACH_PERCENTILE_FOR_RATE`）は廃止し、ベイズ調整に置き換え済み。
+  **対象期間セレクタ**（直近3/6/12/24ヶ月・全期間。既定=直近12ヶ月。`PERIOD_OPTIONS`／`_period_window`）で絞り、選んだ期間で `add_saved_rate_adj` を再計算する（保存率の地合いは年々大きく低下しており、全期間だと昔の投稿が上位を独占して「今効く型」が見えないため）。
 
 #### 📈 トレンドタブ（継続・成長の見える化）
 
@@ -156,14 +179,17 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - **月次の平均リーチ・平均保存数**（インサイト取得時のみ）— 立ち上げ期の伸びを月次で確認
 - **アカウント日次インサイトの推移**（`df_account_insights` がある時のみ）— プロフィールアクセス・リーチ・リンククリック
 
-#### 📊 詳しい分析タブ（保存/リーチ軸・将来は画像解析も）
+#### 📊 詳しい分析タブ（保存/リーチ軸・写真の傾向）
 
 インサイト取得済み投稿のみ対象。いいね基準をやめ販売ファネル軸で集計。未取得時はいいね基準にフォールバック。
-将来は画像の数値解析結果（構図・色・被写体 × 保存/リーチ）をここに追加予定。内部4サブタブ:
+内部5サブタブ:
 - **📌 タイプ別の効き目** — `media_type` 別に**平均リーチ・平均保存数・平均プロフィール訪問**を棒グラフ＋表
 - **🗓️ 投稿タイミング** — 曜日×時間帯ヒートマップ（インサイト時は**平均保存数**基準・未取得時はいいね数）
 - **📈 リーチ・発見の推移** — リーチ推移（タイプ色分け）＋フォロワー外リーチ比率の推移（`non_follower_reach_rate` がある時）
 - **🔖 ハッシュタグ** — タグ別の**平均保存数 TOP20**（インサイト時）＋使用頻度 TOP20
+- **🎨 写真の傾向** — `visual_engagement_analysis` を可視化。各視覚特徴の5分位（最低/低/中/高/最高）帯別の
+  平均（調整保存率優先）＋主要色別の平均を棒グラフ表示。**対象期間セレクタ**（既定=直近12ヶ月）で絞り、
+  その期間の df に `add_saved_rate_adj` を再計算してから `visual_engagement_analysis` を都度実行（地合い差の混入を防ぐ）。視覚特徴未取得時は `collect_visual.py` 実行を案内
 
 #### 💡 投稿アイデアタブ
 
@@ -181,7 +207,10 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - `merge_follower_at_post_date()` — 各投稿日のフォロワー数を紐付けてエンゲージメント率を計算
 - `load_insights_data()` — `result/insights/` の**全**メディア別インサイトCSVを統合し、`id` ごとに最新の非欠損値を採用（日次で直近N件のみ収集しても、過去 `--all` で取得した全履歴のカバレッジが失われない。`groupby.last()` を利用）
 - `load_account_insights_data()` — `result/insights/` の全アカウント別インサイトCSVを日次推移として結合
-- `merge_insights()` — メディアデータに `id` でインサイト列を結合。保存率 `saved_rate`・リーチベースのエンゲージ率 `reach_engagement_rate`・フォロワー外リーチ比率 `non_follower_reach_rate`（`reach_non_follower`／`reach`）・総エンゲージ率 `total_engagement_rate`（`total_interactions`＝いいね＋コメント＋保存＋シェア ÷ 投稿時点フォロワー。`total_interactions` が無い投稿は基本ERにフォールバック）を算出
+- `load_visual_data()` — `result/visual/` の**全**視覚特徴CSVを統合し、`id` ごとに最新の非欠損特徴を採用（`load_insights_data` と同じ `groupby.last()` 方針）
+- `merge_visual()` — メディアデータに `id` で視覚特徴列（brightness等の数値9種＋`dominant_color`）を結合。未取得は欠損のまま
+- `add_saved_rate_adj()` — **渡された df の範囲で** m（リーチ加重保存率）・C（reach平均）を計算し `saved_rate_adj` を（再）算出。期間で絞った部分集合に対して呼ぶと**その期間の地合いで再正規化**される（保存率の地合いは年々約60倍下がっており、全期間で比べると昔の投稿が上位を独占して「今効く型」が見えなくなるため、ダッシュボードは直近Nヶ月に絞って本関数を呼び直す）
+- `merge_insights()` — メディアデータに `id` でインサイト列を結合。保存率 `saved_rate`・**ベイズ調整保存率 `saved_rate_adj`**（低リーチ補正。`(saved + m*C)/(reach + C)`。m=全体のリーチ加重保存率、C=reach平均。reach分布が古い極小投稿で右に歪むため中央値ではなく平均を採用。リーチが小さい投稿の保存率を全体平均へ引き寄せ、まぐれの高保存率を抑える）・リーチベースのエンゲージ率 `reach_engagement_rate`・フォロワー外リーチ比率 `non_follower_reach_rate`（`reach_non_follower`／`reach`）・総エンゲージ率 `total_engagement_rate`（`total_interactions`＝いいね＋コメント＋保存＋シェア ÷ 投稿時点フォロワー。`total_interactions` が無い投稿は基本ERにフォールバック）を算出
 - `load_competitor_data()` — `result/competitors/` の各競合の最新メディアCSVを結合（`competitor`列付き）
 - `load_hashtag_data()` — `result/hashtags/` の各タグの最新CSVを結合（`search_hashtag`列付き）
 
@@ -200,3 +229,6 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 - アカウントインサイトは `period=day`（当日分のみ）。推移を見るには日次cron（`run.sh`）で毎日蓄積する
 - インサイトAPIにもレート制限（毎時200リクエスト）あり。`collect_insights.py` はデフォルトで直近200件のみ取得する
 - APIバージョンは v22.0。欲しいインサイト指標は v22 ですべて取得可能（バージョンアップは任意）。`impressions` と非Reelsの `video_views` は2025年に廃止済み（それぞれ `reach`・`views` で代替）
+- 視覚特徴（`collect_visual.py`）は**ローカル軽量分析**のみで、モチーフ（何が描かれているか）は判定できない（色み・明るさ・余白・描き込み量などの物理量）。意味的な分析が必要になったら Claude Vision（少額課金）への拡張を検討する
+- 視覚特徴は **CDN URL から取得できる投稿のみ**（期限切れの古い投稿は欠損）。`collect_visual.py` を定期実行して取れるうちに蓄積する。画像ファイルは保存せず数値特徴だけを `result/visual/` にキャッシュする方針
+- `visual_engagement_analysis` の結果は相関であって因果ではない。帯ごとの件数が少ない初期は方向性の参考として扱う

@@ -196,6 +196,75 @@ def load_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     return combined.groupby("id", as_index=False).last()
 
 
+_VISUAL_NUMERIC = [
+    "brightness",
+    "saturation",
+    "contrast",
+    "colorfulness",
+    "warm_ratio",
+    "whitespace_ratio",
+    "edge_density",
+    "palette_size",
+    "sharpness",
+]
+# カテゴリ特徴（数値変換しない）
+_VISUAL_CATEGORICAL = ["dominant_color"]
+
+
+def load_visual_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
+    """
+    result/visual/ の全 *_visual_*.csv を統合し、id ごとに最新の非欠損特徴を残して返す。
+
+    load_insights_data と同じ方針で、古い→新しい順に統合し id ごとに
+    groupby.last() で最新の非NULL値を採用する（増分収集してもカバレッジを失わない）。
+
+    Returns
+    -------
+    pd.DataFrame
+        投稿ID別の視覚特徴（id + brightness/saturation/.../dominant_color）。
+        データが無い場合は空のDataFrame。
+    """
+    vis_dir = os.path.join(result_dir, "visual")
+    files = sorted(glob.glob(os.path.join(vis_dir, "*_visual_*.csv")))
+    if not files:
+        return pd.DataFrame()
+    frames = []
+    for f in files:
+        try:
+            df = pd.read_csv(f)
+        except Exception:
+            continue
+        if df.empty or "id" not in df.columns:
+            continue
+        df["id"] = df["id"].astype(str)
+        for col in _VISUAL_NUMERIC:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    return combined.groupby("id", as_index=False).last()
+
+
+def merge_visual(df_media: pd.DataFrame, df_visual: pd.DataFrame) -> pd.DataFrame:
+    """
+    メディアデータ（load_media_data）に視覚特徴列を id で結合する。
+    特徴未取得の投稿は欠損（NaN/NA）のまま残す。
+    """
+    if df_media.empty:
+        return df_media
+    df = df_media.copy()
+    feat_cols = _VISUAL_NUMERIC + _VISUAL_CATEGORICAL
+    if df_visual.empty or "id" not in df.columns:
+        for col in feat_cols:
+            df[col] = pd.NA
+        return df
+    df["id"] = df["id"].astype(str)
+    cols = ["id"] + [c for c in feat_cols if c in df_visual.columns]
+    return df.merge(df_visual[cols], on="id", how="left")
+
+
 def load_account_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     """
     result/insights/ の全 *_account_insights_*.csv を読み込み、日次推移として返す。
@@ -228,6 +297,36 @@ def load_account_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     return result.dropna(subset=["date"]).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
 
 
+def add_saved_rate_adj(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    ベイズ調整保存率 saved_rate_adj を（再）算出して返す（低リーチ補正）。
+
+    各投稿に「平均どおりにふるまう幽霊閲覧者 C 人」を混ぜてから保存率を計算し、
+    リーチが小さい投稿を全体平均 m に引き寄せる： (saved + m*C)/(reach + C)*100。
+    - m＝渡された df 内のリーチ加重保存率 Σsaved/Σreach（分数）
+    - C＝df 内の reach 平均（reach分布は古い極小投稿で右に強く歪むため、中央値だと
+      小さすぎて低リーチのまぐれを抑えきれない。平均の方が「信頼に必要な露出量」を表す）
+
+    ★ m・C は **渡された df の範囲で** 計算するため、期間で絞った部分集合に対して
+       呼べばその期間の地合いで再正規化される（昔と今で保存率の地合いが約60倍違うため、
+       「今効く型」を見るときは直近Nヶ月に絞って本関数を呼び直すこと）。
+    reach/saved が無い・全欠損なら saved_rate_adj 列を NA で用意する。
+    """
+    df = df.copy()
+    df["saved_rate_adj"] = pd.NA
+    if "reach" not in df.columns or "saved" not in df.columns:
+        return df
+    saved = pd.to_numeric(df["saved"], errors="coerce")
+    reach = pd.to_numeric(df["reach"], errors="coerce")
+    valid = saved.notna() & (reach > 0)
+    if valid.any() and reach[valid].sum() > 0:
+        m = float(saved[valid].sum() / reach[valid].sum())
+        C = float(reach[valid].mean())
+        adj = (saved + m * C) / (reach + C) * 100
+        df.loc[valid, "saved_rate_adj"] = adj[valid].round(2)
+    return df
+
+
 def merge_insights(df_media: pd.DataFrame, df_insights: pd.DataFrame) -> pd.DataFrame:
     """
     メディアデータ（load_media_data）にインサイト列を id で結合する。
@@ -235,13 +334,17 @@ def merge_insights(df_media: pd.DataFrame, df_insights: pd.DataFrame) -> pd.Data
     保存率 saved_rate（saved/reach）・リーチ基準エンゲージ率 reach_engagement_rate・
     フォロワー外リーチ比率 non_follower_reach_rate に加え、保存・シェアを含む
     総エンゲージ率 total_engagement_rate（total_interactions/フォロワー）も算出する。
+    さらに低リーチ偏りを補正したベイズ調整保存率 saved_rate_adj も算出する
+    （(saved + m*C)/(reach + C)。m=全体のリーチ加重保存率、C=reachの平均。
+    リーチが小さい投稿の保存率を全体平均へ引き寄せ、まぐれの高保存率を抑える）。
     """
     if df_media.empty:
         return df_media
     df = df_media.copy()
     if df_insights.empty or "id" not in df.columns:
         for col in _INSIGHT_NUMERIC + [
-            "saved_rate", "reach_engagement_rate", "non_follower_reach_rate", "total_engagement_rate",
+            "saved_rate", "saved_rate_adj", "reach_engagement_rate",
+            "non_follower_reach_rate", "total_engagement_rate",
         ]:
             df[col] = pd.NA
         return df
@@ -253,6 +356,7 @@ def merge_insights(df_media: pd.DataFrame, df_insights: pd.DataFrame) -> pd.Data
         reach = pd.to_numeric(df["reach"], errors="coerce")
         if "saved" in df.columns:
             df["saved_rate"] = (pd.to_numeric(df["saved"], errors="coerce") / reach * 100).round(2)
+            df = add_saved_rate_adj(df)
         interactions = pd.to_numeric(df["like_count"], errors="coerce").fillna(0) + pd.to_numeric(
             df["comments_count"], errors="coerce"
         ).fillna(0)
