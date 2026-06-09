@@ -204,12 +204,8 @@ def fetch_media_insights(
         # メトリック非対応などのエラー → 最小セットで再試行
         result = _request_media_insights(version, media_id, CORE_METRICS, access_token)
     result = result or {}
-    if with_breakdown:
-        breakdown = _request_reach_breakdown(
-            version, f"{media_id}/insights", access_token
-        )
-        if breakdown:
-            result.update(breakdown)
+    # メディア単位の follower breakdown は v22.0 で非対応 (#100 Incompatible breakdowns)
+    # アカウントレベル (fetch_account_insights) でのみ取得する
     return result
 
 
@@ -217,10 +213,8 @@ def _request_reach_breakdown(
     version: str, node: str, access_token: str, period: str | None = None
 ) -> dict | None:
     """
-    reach を follower_type（follower / non_follower）で分解して取得する。
-    node はメディアの "{media-id}/insights" でも、アカウントの "{ig-user-id}/insights" でも可。
-    metric_type=total_value が必須で、結果は total_value.breakdowns に入る。
-    アカウントレベルの reach は period=day が必須なので period を指定する。
+    reach を follow_type（FOLLOWER / NON_FOLLOWER）で分解して取得する。
+    アカウントレベル（{ig-user-id}/insights）専用。period=day 必須。
     非対応・エラー時は None を返す。
 
     Returns
@@ -231,7 +225,7 @@ def _request_reach_breakdown(
     period_param = f"&period={period}" if period else ""
     url = (
         f"https://graph.facebook.com/{version}/{node}"
-        f"?metric=reach&breakdown=follower_type&metric_type=total_value{period_param}"
+        f"?metric=reach&breakdown=follow_type&metric_type=total_value{period_param}"
         f"&access_token={access_token}"
     )
     r = requests.get(url)
@@ -247,9 +241,9 @@ def _request_reach_breakdown(
                 dims = res.get("dimension_values", [])
                 if not dims:
                     continue
-                if dims[0] == "follower":
+                if dims[0] == "FOLLOWER":
                     out["reach_follower"] = res.get("value")
-                elif dims[0] == "non_follower":
+                elif dims[0] == "NON_FOLLOWER":
                     out["reach_non_follower"] = res.get("value")
     return out or None
 
