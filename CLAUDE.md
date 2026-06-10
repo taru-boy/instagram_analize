@@ -17,14 +17,11 @@ Instagram投稿データ収集・分析ツール。Facebook Graph API の Busine
 │   ├── collect_visual.py      # 投稿画像の軽量視覚特徴収集（色・明るさ・余白・描き込み量等。API課金なし）
 │   ├── collect_competitors.py # 競合アカウント収集（collect.pyの関数を再利用）
 │   ├── collect_hashtags.py    # ハッシュタグ人気投稿収集（IG Hashtag Search）
+│   ├── collect_utils.py       # collect系共通ユーティリティ（env読み込み・api_get・ensure_dir）
 │   ├── data_loader.py         # CSV読み込み・データ変換ロジック
 │   ├── insights.py            # 統計ベースの「伸びる条件」抽出（純関数）
 │   ├── suggest.py             # Claude AIによる投稿案生成（構造化出力）
 │   └── dashboard.py           # Streamlit ダッシュボード
-├── notebooks/
-│   └── plot.ipynb       # フォロワー数の時系列可視化（旧）
-├── reference/
-│   └── insta-opning.py  # プログラミングスクール配布の元資料（参照用）
 ├── result/              # 収集済みCSVデータ（.gitignore対象）
 ├── run.sh               # cron用データ収集スクリプト
 ├── run_dashboard.sh     # ダッシュボード起動スクリプト
@@ -140,10 +137,6 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
   構造化出力（`messages.parse()` + Pydantic）でリクエスト。投稿案3〜5件（テーマ・キャプション案・
   タグ・タイプ・推奨時間・根拠・予測エンゲージメント）を生成。結果は `result/suggestions/{today}.json`
   にキャッシュ（同日は再課金しない）。`generate_suggestions(force=True)` で再生成。
-
-### 可視化（`notebooks/plot.ipynb`）
-
-`result/` 内の `-profile-` CSVを全件読み込み、フォロワー数の時系列グラフを描画。
 
 ## ダッシュボード
 

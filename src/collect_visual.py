@@ -36,6 +36,7 @@ import pandas as pd
 import requests
 from PIL import Image
 
+from collect_utils import ensure_dir, load_env
 from data_loader import load_media_data
 
 # 特徴の列順（id をキーに、media_type / timestamp は参照用）
@@ -198,8 +199,7 @@ def main():
     parser.add_argument("--force", action="store_true", help="既に特徴がある id も再計算する")
     args = parser.parse_args()
 
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    result_dir = os.path.join(base_dir, "result")
+    result_dir = os.path.join(load_env().base_dir, "result")
 
     df_media = load_media_data(result_dir)
     if df_media.empty or "id" not in df_media.columns:
@@ -218,7 +218,7 @@ def main():
         target = target.head(args.limit)
 
     out_dir = os.path.join(result_dir, "visual")
-    os.makedirs(out_dir, exist_ok=True)
+    ensure_dir(out_dir)
 
     done_ids = set() if args.force else _existing_done_ids(out_dir)
     todo = target[~target["id"].isin(done_ids)]

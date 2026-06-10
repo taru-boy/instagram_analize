@@ -10,6 +10,74 @@ RESULT_DIR = os.path.join(_BASE, "result")
 DAY_JA = ["月", "火", "水", "木", "金", "土", "日"]
 
 
+def _combine_latest_by_id(pattern: str, numeric_cols: list) -> pd.DataFrame:
+    """複数CSVを古い→新しい順に統合し、id ごとに最新の非欠損値を返す。
+
+    load_insights_data / load_visual_data の共通ロジック（glob→concat→groupby.last）を集約。
+    """
+    files = sorted(glob.glob(pattern))
+    if not files:
+        return pd.DataFrame()
+    frames = []
+    for f in files:
+        try:
+            df = pd.read_csv(f)
+        except Exception:
+            continue
+        if df.empty or "id" not in df.columns:
+            continue
+        df["id"] = df["id"].astype(str)
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).groupby("id", as_index=False).last()
+
+
+def _load_latest_media_by_key(
+    dir_path: str,
+    key_col: str,
+    skip_profile: bool = False,
+) -> pd.DataFrame:
+    """ディレクトリ内の CSV を {key}_{date}.csv パターンで走査し、
+    key ごとに最新ファイルを選んで結合する。
+
+    load_competitor_data / load_hashtag_data の共通ロジックを集約。
+    """
+    files = sorted(glob.glob(os.path.join(dir_path, "*.csv")))
+    if skip_profile:
+        files = [f for f in files if "-profile-" not in os.path.basename(f)]
+    if not files:
+        return pd.DataFrame()
+
+    latest_by_key: dict = {}
+    for f in files:
+        name = os.path.basename(f)
+        m = re.match(r"(.+)_(\d{4}-\d{2}-\d{2})\.csv$", name)
+        if not m:
+            continue
+        key, date = m.group(1), m.group(2)
+        if key not in latest_by_key or date > latest_by_key[key][1]:
+            latest_by_key[key] = (f, date)
+
+    frames = []
+    for key, (f, _) in latest_by_key.items():
+        try:
+            df = pd.read_csv(f, index_col=0)
+            if df.empty:
+                continue
+            df = _normalize_media_df(df)
+            if key_col not in df.columns:
+                df[key_col] = key
+            frames.append(df)
+        except Exception:
+            continue
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def load_profile_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     files = sorted(glob.glob(os.path.join(result_dir, "*-profile-*.csv")))
     rows = []
@@ -36,19 +104,9 @@ def load_media_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     files = [f for f in files if "-profile-" not in os.path.basename(f)]
     if not files:
         return pd.DataFrame()
-    latest = files[-1]
-    df = pd.read_csv(latest, index_col=0)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.drop_duplicates("timestamp", keep="last").reset_index(drop=True)
-    df["like_count"] = pd.to_numeric(df["like_count"], errors="coerce").fillna(0).astype(int)
-    df["comments_count"] = pd.to_numeric(df["comments_count"], errors="coerce").fillna(0).astype(int)
-    # タイムスタンプはUTC。JST(+9時間)に変換して分析
-    df["timestamp_jst"] = df["timestamp"] + pd.Timedelta(hours=9)
-    df["post_date"] = df["timestamp_jst"].dt.normalize()
-    df["hour"] = df["timestamp_jst"].dt.hour
-    df["weekday"] = df["timestamp_jst"].dt.weekday  # 0=月曜, 6=日曜
-    df["day_name"] = df["weekday"].map(lambda x: DAY_JA[x])
-    return df
+    df = pd.read_csv(files[-1], index_col=0)
+    df = _normalize_media_df(df)
+    return df.drop_duplicates("timestamp", keep="last").reset_index(drop=True)
 
 
 def _normalize_media_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -69,80 +127,17 @@ def _normalize_media_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_competitor_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
-    """
-    result/competitors/ 内の各競合の最新メディアCSVを読み込み、1つに結合して返す。
-    competitor 列に元のユーザー名（ファイル名の username 部分）を付与する。
-    """
-    comp_dir = os.path.join(result_dir, "competitors")
-    files = sorted(glob.glob(os.path.join(comp_dir, "*.csv")))
-    files = [f for f in files if "-profile-" not in os.path.basename(f)]
-    if not files:
-        return pd.DataFrame()
-
-    # username ごとに最新ファイル（日付が新しいもの）を選ぶ
-    latest_by_user: dict = {}
-    for f in files:
-        name = os.path.basename(f)
-        m = re.match(r"(.+)_(\d{4}-\d{2}-\d{2})\.csv$", name)
-        if not m:
-            continue
-        username, date = m.group(1), m.group(2)
-        if username not in latest_by_user or date > latest_by_user[username][1]:
-            latest_by_user[username] = (f, date)
-
-    frames = []
-    for username, (f, _date) in latest_by_user.items():
-        try:
-            df = pd.read_csv(f, index_col=0)
-            if df.empty:
-                continue
-            df = _normalize_media_df(df)
-            df["competitor"] = username
-            frames.append(df)
-        except Exception:
-            continue
-
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+    """result/competitors/ 内の各競合の最新メディアCSVを読み込み、1つに結合して返す。"""
+    return _load_latest_media_by_key(
+        os.path.join(result_dir, "competitors"), "competitor", skip_profile=True
+    )
 
 
 def load_hashtag_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
-    """
-    result/hashtags/ 内の各タグの最新CSVを読み込み、1つに結合して返す。
-    search_hashtag 列に検索したタグ名が入る。
-    """
-    tag_dir = os.path.join(result_dir, "hashtags")
-    files = sorted(glob.glob(os.path.join(tag_dir, "*.csv")))
-    if not files:
-        return pd.DataFrame()
-
-    latest_by_tag: dict = {}
-    for f in files:
-        name = os.path.basename(f)
-        m = re.match(r"(.+)_(\d{4}-\d{2}-\d{2})\.csv$", name)
-        if not m:
-            continue
-        tag, date = m.group(1), m.group(2)
-        if tag not in latest_by_tag or date > latest_by_tag[tag][1]:
-            latest_by_tag[tag] = (f, date)
-
-    frames = []
-    for tag, (f, _date) in latest_by_tag.items():
-        try:
-            df = pd.read_csv(f, index_col=0)
-            if df.empty:
-                continue
-            df = _normalize_media_df(df)
-            if "search_hashtag" not in df.columns:
-                df["search_hashtag"] = tag
-            frames.append(df)
-        except Exception:
-            continue
-
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+    """result/hashtags/ 内の各タグの最新CSVを読み込み、1つに結合して返す。"""
+    return _load_latest_media_by_key(
+        os.path.join(result_dir, "hashtags"), "search_hashtag"
+    )
 
 
 _INSIGHT_NUMERIC = [
@@ -158,42 +153,17 @@ _INSIGHT_NUMERIC = [
 
 
 def load_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
-    """
-    result/insights/ の全 *_media_insights_*.csv を統合し、id ごとに最新値を残して返す。
+    """result/insights/ の全 *_media_insights_*.csv を統合し、id ごとに最新値を残して返す。
 
     日次で直近N件のみ収集しても、過去に --all で取得した全履歴のカバレッジが
     失われないよう、古い→新しい順に統合し、id ごとに「最新の非欠損値」を採用する。
     （ファイル名末尾が YYYY-MM-DD のため sorted で古い→新しい順になり、
     　groupby.last() がグループ内の最新の非NULL値を返す。）
-
-    Returns
-    -------
-    pd.DataFrame
-        投稿ID別インサイト（id, reach, saved, shares, total_interactions, profile_visits, views）。
-        データが無い場合は空のDataFrame。
     """
-    ins_dir = os.path.join(result_dir, "insights")
-    files = sorted(glob.glob(os.path.join(ins_dir, "*_media_insights_*.csv")))
-    if not files:
-        return pd.DataFrame()
-    frames = []
-    for f in files:
-        try:
-            df = pd.read_csv(f)
-        except Exception:
-            continue
-        if df.empty or "id" not in df.columns:
-            continue
-        df["id"] = df["id"].astype(str)
-        for col in _INSIGHT_NUMERIC:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        frames.append(df)
-    if not frames:
-        return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
-    # id ごとに最新の非欠損値を採用（古い→新しい順なので last が最新値）
-    return combined.groupby("id", as_index=False).last()
+    return _combine_latest_by_id(
+        os.path.join(result_dir, "insights", "*_media_insights_*.csv"),
+        _INSIGHT_NUMERIC,
+    )
 
 
 _VISUAL_NUMERIC = [
@@ -212,39 +182,15 @@ _VISUAL_CATEGORICAL = ["dominant_color"]
 
 
 def load_visual_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
-    """
-    result/visual/ の全 *_visual_*.csv を統合し、id ごとに最新の非欠損特徴を残して返す。
+    """result/visual/ の全 *_visual_*.csv を統合し、id ごとに最新の非欠損特徴を残して返す。
 
     load_insights_data と同じ方針で、古い→新しい順に統合し id ごとに
     groupby.last() で最新の非NULL値を採用する（増分収集してもカバレッジを失わない）。
-
-    Returns
-    -------
-    pd.DataFrame
-        投稿ID別の視覚特徴（id + brightness/saturation/.../dominant_color）。
-        データが無い場合は空のDataFrame。
     """
-    vis_dir = os.path.join(result_dir, "visual")
-    files = sorted(glob.glob(os.path.join(vis_dir, "*_visual_*.csv")))
-    if not files:
-        return pd.DataFrame()
-    frames = []
-    for f in files:
-        try:
-            df = pd.read_csv(f)
-        except Exception:
-            continue
-        if df.empty or "id" not in df.columns:
-            continue
-        df["id"] = df["id"].astype(str)
-        for col in _VISUAL_NUMERIC:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        frames.append(df)
-    if not frames:
-        return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
-    return combined.groupby("id", as_index=False).last()
+    return _combine_latest_by_id(
+        os.path.join(result_dir, "visual", "*_visual_*.csv"),
+        _VISUAL_NUMERIC,
+    )
 
 
 def merge_visual(df_media: pd.DataFrame, df_visual: pd.DataFrame) -> pd.DataFrame:

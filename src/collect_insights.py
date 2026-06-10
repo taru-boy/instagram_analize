@@ -25,14 +25,12 @@ collect.py が使う Business Discovery API は like/comment しか返さない�
 """
 
 import argparse
-import json
 import os
 import time
-from datetime import datetime as dt
 
 import pandas as pd
-import requests
-from dotenv import load_dotenv
+
+from collect_utils import api_get, ensure_dir, load_env, today_str
 
 # メディアタイプごとに取得を試みるメトリック。
 # タイプ非対応のメトリックは API が #100 エラーを返すため、core にフォールバックする。
@@ -76,20 +74,18 @@ def main():
     )
     args = parser.parse_args()
 
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    load_dotenv(dotenv_path=os.path.join(base_dir, ".env"))
-
-    access_token = os.getenv("ACCESS_TOKEN")
-    version = os.getenv("VERSION")
-    ig_user_id = os.getenv("IG_USER_ID")
+    env = load_env()
+    access_token = env.access_token
+    version = env.version
+    ig_user_id = env.ig_user_id
 
     if not all([access_token, version, ig_user_id]):
         print("ACCESS_TOKEN / VERSION / IG_USER_ID が .env にありません。")
         return
 
-    today = dt.now().strftime("%Y-%m-%d")
-    out_dir = os.path.join(base_dir, "result", "insights")
-    os.makedirs(out_dir, exist_ok=True)
+    today = today_str()
+    out_dir = os.path.join(env.base_dir, "result", "insights")
+    ensure_dir(out_dir)
 
     limit = None if args.all else args.limit
 
@@ -169,8 +165,7 @@ def fetch_media_list(
         f"?fields=id,media_type,timestamp&limit=100&access_token={access_token}"
     )
     while url:
-        r = requests.get(url)
-        data = json.loads(r.content)
+        data = api_get(url)
         if "error" in data:
             print(f"メディア一覧の取得でエラー: {data['error']}")
             break
@@ -228,8 +223,7 @@ def _request_reach_breakdown(
         f"?metric=reach&breakdown=follow_type&metric_type=total_value{period_param}"
         f"&access_token={access_token}"
     )
-    r = requests.get(url)
-    data = json.loads(r.content)
+    data = api_get(url)
     if "error" in data:
         return None
     out = {}
@@ -259,8 +253,7 @@ def _request_media_insights(
         f"https://graph.facebook.com/{version}/{media_id}/insights"
         f"?metric={metric_str}&access_token={access_token}"
     )
-    r = requests.get(url)
-    data = json.loads(r.content)
+    data = api_get(url)
     if "error" in data:
         return None
     out = {}
@@ -286,8 +279,7 @@ def fetch_account_insights(
         f"https://graph.facebook.com/{version}/{ig_user_id}/insights"
         f"?metric={metric_str}&period=day&metric_type=total_value&access_token={access_token}"
     )
-    r = requests.get(url)
-    data = json.loads(r.content)
+    data = api_get(url)
     if "error" in data:
         print(f"アカウントインサイトの取得でエラー: {data['error']}")
         return {}

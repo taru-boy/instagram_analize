@@ -12,11 +12,11 @@ from data_loader import (DAY_JA, add_saved_rate_adj,
                          load_media_data, load_profile_data,
                          load_visual_data, merge_follower_at_post_date,
                          merge_insights, merge_visual)
-from insights import build_summary, visual_engagement_analysis
+from insights import (MEDIA_TYPE_JA, build_summary,
+                      visual_engagement_analysis)
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "result")
 
-MEDIA_TYPE_JA = {"IMAGE": "画像", "CAROUSEL_ALBUM": "スライド", "VIDEO": "動画"}
 MEDIA_TYPE_COLOR = {"IMAGE": "#E1306C", "CAROUSEL_ALBUM": "#833AB4", "VIDEO": "#F56040"}
 
 st.set_page_config(
@@ -158,6 +158,28 @@ def _period_window(df, months):
     return df[df["timestamp_jst"] >= cutoff]
 
 
+def _select_period(key: str, label: str = "対象期間", help_text: str | None = None):
+    """PERIOD_OPTIONS に基づく期間セレクタ。既定は直近12ヶ月。"""
+    return st.selectbox(
+        label,
+        options=list(PERIOD_OPTIONS.keys()),
+        format_func=lambda x: PERIOD_OPTIONS[x],
+        index=2,
+        key=key,
+        help=help_text,
+    )
+
+
+def _kpi(col, label: str, value, fmt, *, recent=None, prev=None, delta_kind=None, help_text: str | None = None):
+    """1つの KPI カードを描画する。"""
+    col.metric(
+        label,
+        _val(value, fmt),
+        delta=_fmt_delta(recent, prev, delta_kind) if delta_kind else None,
+        help=help_text,
+    )
+
+
 def _account_nf_rate(df_ai, anchor, days=30, offset=0):
     """アカウント日次インサイトから直近days日のフォロワー外リーチ比率を返す。
     メディア単位の breakdown は Instagram API v22.0 で非対応になったため
@@ -225,46 +247,32 @@ with tab_home:
     st.markdown("##### 🎯 直近30日の重視KPI（前30日比）　— 発見 → 保存 → プロフィール訪問 → フォロー")
     k1, k2, k3, k4 = st.columns(4)
 
-    k1.metric(
-        "🔖 保存率", _val(sr_now, lambda v: f"{v:.2f}%"),
-        delta=_fmt_delta(sr_now, sr_prev, "pt"),
-        help="保存数の合計 ÷ リーチの合計（リーチ加重）。作品が刺さった最良のシグナル。1%超で優秀。"
-             if HAS_INSIGHTS else "`python src/collect_insights.py` でインサイトを収集すると表示されます",
-    )
-    k2.metric(
-        "👀 平均リーチ", _val(reach_now, lambda v: f"{v:,.0f}"),
-        delta=_fmt_delta(reach_now, reach_prev, "int"),
-        help="1投稿が届いた人数の平均。リール・保存・シェアで新規の発見が増えます。",
-    )
-    k3.metric(
-        "🏠 平均プロフィール訪問", _val(pv_now, lambda v: f"{v:,.1f}"),
-        delta=_fmt_delta(pv_now, pv_prev, "float1"),
-        help="投稿を見てプロフィールに来た数（投稿あたり平均）。販売・受注の入口。",
-    )
-    k4.metric(
-        "📈 フォロワー純増", _val(gain_now, lambda v: f"{v:+,}"),
-        delta=_fmt_delta(gain_now, gain_prev, "int"),
-        help="直近30日のフォロワー純増。デルタは前30日の純増との差。",
-    )
+    _kpi(k1, "🔖 保存率", sr_now, lambda v: f"{v:.2f}%",
+         recent=sr_now, prev=sr_prev, delta_kind="pt",
+         help_text="保存数の合計 ÷ リーチの合計（リーチ加重）。作品が刺さった最良のシグナル。1%超で優秀。"
+                   if HAS_INSIGHTS else "`python src/collect_insights.py` でインサイトを収集すると表示されます")
+    _kpi(k2, "👀 平均リーチ", reach_now, lambda v: f"{v:,.0f}",
+         recent=reach_now, prev=reach_prev, delta_kind="int",
+         help_text="1投稿が届いた人数の平均。リール・保存・シェアで新規の発見が増えます。")
+    _kpi(k3, "🏠 平均プロフィール訪問", pv_now, lambda v: f"{v:,.1f}",
+         recent=pv_now, prev=pv_prev, delta_kind="float1",
+         help_text="投稿を見てプロフィールに来た数（投稿あたり平均）。販売・受注の入口。")
+    _kpi(k4, "📈 フォロワー純増", gain_now, lambda v: f"{v:+,}",
+         recent=gain_now, prev=gain_prev, delta_kind="int",
+         help_text="直近30日のフォロワー純増。デルタは前30日の純増との差。")
 
     # === 補助KPI ===
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric(
-        "🆕 フォロワー外リーチ比率", _val(nf_now, lambda v: f"{v:.0f}%"),
-        delta=_fmt_delta(nf_now, nf_prev, "pt"),
-        help="フォロワー以外に届いたリーチの割合（リーチ加重）。リールで伸ばせます。",
-    )
-    s2.metric("👥 フォロワー数", _val(latest_followers, lambda v: f"{v:,}"))
-    s3.metric(
-        "💬 エンゲージ率（リーチ基準）", _val(eng_now, lambda v: f"{v:.2f}%"),
-        delta=_fmt_delta(eng_now, eng_prev, "pt"),
-        help="(いいね＋コメント) の合計 ÷ リーチの合計。",
-    )
-    s4.metric(
-        "🔁 平均シェア数", _val(sh_now, lambda v: f"{v:,.1f}"),
-        delta=_fmt_delta(sh_now, sh_prev, "float1"),
-        help="ストーリーズ/DMでの共有（投稿あたり平均）。",
-    )
+    _kpi(s1, "🆕 フォロワー外リーチ比率", nf_now, lambda v: f"{v:.0f}%",
+         recent=nf_now, prev=nf_prev, delta_kind="pt",
+         help_text="フォロワー以外に届いたリーチの割合（リーチ加重）。リールで伸ばせます。")
+    _kpi(s2, "👥 フォロワー数", latest_followers, lambda v: f"{v:,}")
+    _kpi(s3, "💬 エンゲージ率（リーチ基準）", eng_now, lambda v: f"{v:.2f}%",
+         recent=eng_now, prev=eng_prev, delta_kind="pt",
+         help_text="(いいね＋コメント) の合計 ÷ リーチの合計。")
+    _kpi(s4, "🔁 平均シェア数", sh_now, lambda v: f"{v:,.1f}",
+         recent=sh_now, prev=sh_prev, delta_kind="float1",
+         help_text="ストーリーズ/DMでの共有（投稿あたり平均）。")
 
     st.caption(
         f"※ 上段KPIは**直近30日**の投稿 {n_recent} 件（前30日は {n_prev} 件）から算出・前30日比。"
@@ -323,13 +331,10 @@ with tab_home:
                 format_func=lambda x: sort_options[x],
             )
         with ctrl_m:
-            period_months = st.selectbox(
-                "対象期間",
-                options=list(PERIOD_OPTIONS.keys()),
-                format_func=lambda x: PERIOD_OPTIONS[x],
-                index=2,  # 既定: 直近12ヶ月
-                help="昔（〜2023年）は保存率の地合いが今の約60倍。全期間だと古い投稿が上位を独占するため、"
-                     "「今効く型」を見るには期間を絞って比較します。",
+            period_months = _select_period(
+                "period_home",
+                help_text="昔（〜2023年）は保存率の地合いが今の約60倍。全期間だと古い投稿が上位を独占するため、"
+                          "「今効く型」を見るには期間を絞って比較します。",
             )
         with ctrl_r:
             n_show = st.select_slider("表示件数", options=[6, 9, 12, 18, 24, 30], value=12)
@@ -761,14 +766,10 @@ with tab_detail:
 
     # --- 写真の傾向（視覚特徴 × エンゲージ） ---
     with d_tab5:
-        period_v = st.selectbox(
-            "対象期間",
-            options=list(PERIOD_OPTIONS.keys()),
-            format_func=lambda x: PERIOD_OPTIONS[x],
-            index=2,  # 既定: 直近12ヶ月
-            key="visual_period",
-            help="保存率の地合いは年々大きく下がっているため、昔と今を混ぜると傾向がぼやけます。"
-                 "「今効く見た目」を見るには直近に絞ってください。",
+        period_v = _select_period(
+            "visual_period",
+            help_text="保存率の地合いは年々大きく下がっているため、昔と今を混ぜると傾向がぼやけます。"
+                      "「今効く見た目」を見るには直近に絞ってください。",
         )
         df_vis = _period_window(df_media, period_v)
         df_vis = add_saved_rate_adj(df_vis)  # その期間の地合いで再正規化

@@ -1,35 +1,20 @@
 # 必要なモジュールをimport
-import json
 import os
 import re
 from datetime import datetime as dt
 
 import pandas as pd
-import requests
-from dotenv import load_dotenv
+
+from collect_utils import api_get, ensure_dir, load_env, today_str
 
 
 def main():
     """
     メイン関数
     """
-
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-    # .envファイルからトークン情報などの取得
-    load_dotenv(dotenv_path=os.path.join(base_dir, ".env"))
-
-    # os.environ.getまたはos.getenvを使用してenvファイルからトークン情報の読み込み
-    access_token = os.getenv("ACCESS_TOKEN")
-    version = os.getenv("VERSION")
-    ig_user_id = os.getenv("IG_USER_ID")
-    user_id = os.getenv("TARGET_USER_ID")
-
-    # 今日の日付を取得　文字列で年-月-日の型式にする
-    today = dt.now().strftime("%Y-%m-%d")
-
-    path = os.path.join(base_dir, "result")
-    collect_account(version, ig_user_id, user_id, access_token, today, path)
+    env = load_env()
+    path = os.path.join(env.base_dir, "result")
+    collect_account(env.version, env.ig_user_id, env.target_user_id, env.access_token, today_str(), path)
 
 
 def collect_account(
@@ -100,12 +85,11 @@ def collect_account(
 
     # 重複したカラム名があるとデータポータルで読み込めないため、重複しているカラム名idの左側のほうを残して右側は削除
     df_profile = df_profile.loc[:, ~df_profile.columns.duplicated()]
-    make_result_dirs(out_dir)
+    ensure_dir(out_dir)
     df_profile.to_csv(f"{out_dir}/{user_id}-profile-{today}.csv")
 
     # メディア情報の取り出し
     media_data = df_profile["media.data"][0]
-    # pprint(media_data[3].keys())
 
     # データフレームを作るための空の辞書を作成
     data_dict = make_dict()
@@ -137,18 +121,6 @@ def collect_account(
     print(f"{user_id} の収集が完了しました。")
     return True
 
-
-def make_result_dirs(path):
-    """
-    結果データ保存のためのディレクトリ作成
-
-    Parameters
-    ----------
-    path : str
-        結果データ保存のためのディレクトリのパス名
-    """
-    if not os.path.isdir(path):
-        os.makedirs(path)
 
 
 def make_dict() -> dict:
@@ -207,12 +179,7 @@ def call_business_profile(
     # ビジネスディスカバリーのエンドポイントの設定　"https://graph.facebook.com/v9/ig_user_id?fields=business_discovery.username(user_id)){followers_count,media_count,media{comments_count,like_count}}&access_token={access-token}"
     business_api = f"https://graph.facebook.com/{version}/{ig_user_id}?fields=business_discovery.username({user_id}){{username, website, name, id, profile_picture_url, biography, follows_count, followers_count, media_count, media{{id, timestamp, like_count, comments_count, caption, media_type, media_url, thumbnail_url, video_url}}}}&access_token={access_token}"
 
-    # GETリクエスト
-    r = requests.get(business_api)
-
-    # JSON文字列を辞書に変換
-    account_dict = json.loads(r.content)
-    return account_dict
+    return api_get(business_api)
 
 
 def get_after_key(account_dict: dict) -> str:
@@ -269,12 +236,7 @@ def pagenate(
     """
     # ビジネスディスカバリーのページ送りのエンドポイントの設定　"https://graph.facebook.com/v9/ig_user_id?fields=business_discovery.username(user_id)){media.after(after_key).limit(number)followers_count,media_count,media{comments_count,like_count}}&access_token=access-token"
     api_pagenation = f"https://graph.facebook.com/{version}/{ig_user_id}?fields=business_discovery.username({user_id}){{media.after({after_key}).limit(1000){{id, timestamp, like_count, comments_count, caption, media_type, media_url, thumbnail_url, video_url}}}}&access_token={access_token}"
-    # GETリクエスト
-    r = requests.get(api_pagenation)
-
-    # JSON文字列を辞書に変換
-    account_dict = json.loads(r.content)
-    return account_dict
+    return api_get(api_pagenation)
 
 
 def make_df(media_data: list, data_dict: dict) -> pd.DataFrame:

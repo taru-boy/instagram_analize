@@ -6,15 +6,13 @@
 #     （一度照会したタグは7日間カウントに含まれる）
 #   - 通常レート制限は 200リクエスト/時/ユーザートークン
 #   そのため TREND_HASHTAGS は5〜10個に絞り、cronは週1〜2回程度に抑えること。
-import json
 import os
 import re
 import time
-from datetime import datetime as dt
 
 import pandas as pd
-import requests
-from dotenv import load_dotenv
+
+from collect_utils import api_get, ensure_dir, load_env, today_str
 
 
 def search_hashtag_id(
@@ -43,8 +41,7 @@ def search_hashtag_id(
         f"https://graph.facebook.com/{version}/ig_hashtag_search"
         f"?user_id={ig_user_id}&q={tag}&access_token={access_token}"
     )
-    r = requests.get(url)
-    data = json.loads(r.content)
+    data = api_get(url)
     try:
         return data["data"][0]["id"]
     except (KeyError, IndexError):
@@ -79,7 +76,7 @@ def get_top_media(
                 f"?user_id={ig_user_id}&fields={fields}&limit={limit}"
                 f"&access_token={access_token}"
             )
-            data = json.loads(requests.get(url).content)
+            data = api_get(url)
             if "data" in data:
                 return data["data"]
 
@@ -129,12 +126,7 @@ def main():
     .env の TREND_HASHTAGS（カンマ区切り）を読み、各タグの人気投稿を
     result/hashtags/ 配下に保存する。
     """
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    load_dotenv(dotenv_path=os.path.join(base_dir, ".env"))
-
-    access_token = os.getenv("ACCESS_TOKEN")
-    version = os.getenv("VERSION")
-    ig_user_id = os.getenv("IG_USER_ID")
+    env = load_env()
 
     raw = os.getenv("TREND_HASHTAGS", "")
     tags = [t.strip().lstrip("#") for t in raw.split(",") if t.strip()]
@@ -149,16 +141,16 @@ def main():
     if len(tags) > 30:
         print("警告: タグが30個を超えています。7日間30タグ制限に注意してください。")
 
-    today = dt.now().strftime("%Y-%m-%d")
-    out_dir = os.path.join(base_dir, "result", "hashtags")
-    os.makedirs(out_dir, exist_ok=True)
+    today = today_str()
+    out_dir = os.path.join(env.base_dir, "result", "hashtags")
+    ensure_dir(out_dir)
 
     print(f"トレンドタグ {len(tags)} 件を収集します: {tags}")
     for tag in tags:
-        hashtag_id = search_hashtag_id(version, ig_user_id, access_token, tag)
+        hashtag_id = search_hashtag_id(env.version, env.ig_user_id, env.access_token, tag)
         if not hashtag_id:
             continue
-        media_list = get_top_media(version, ig_user_id, access_token, hashtag_id)
+        media_list = get_top_media(env.version, env.ig_user_id, env.access_token, hashtag_id)
         if not media_list:
             continue
         df = make_hashtag_df(media_list, tag)
