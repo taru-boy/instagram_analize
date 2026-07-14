@@ -1,8 +1,11 @@
+import html
 import os
 import sys
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,25 +20,169 @@ from insights import (MEDIA_TYPE_JA, build_summary,
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "result")
 
-MEDIA_TYPE_COLOR = {"IMAGE": "#E1306C", "CAROUSEL_ALBUM": "#833AB4", "VIDEO": "#F56040"}
+# ============================================================
+# デザイントークン（和紙×藍）
+# 配色・CSSセレクタはここに集約する。.streamlit/config.toml のテーマ値と対で管理し、
+# Streamlitのバージョンアップで data-testid セレクタが崩れたらこのブロックだけ直す。
+# データ色は dataviz 検証済み（藍/橙/菫、和紙サーフェス上でコントラスト3:1以上）。
+# ============================================================
+C_PAGE, C_CARD, C_LINE = "#f7f3ec", "#fffdf9", "#e7e0d4"
+C_INK, C_INK2, C_INK3 = "#2b2723", "#6f675d", "#948b7d"
+C_GRID = "#ece5d8"
+C_BLUE, C_ORANGE, C_VIOLET = "#2a78d6", "#eb6834", "#4a3aa7"
+C_UP, C_DOWN = "#006300", "#c04338"
+SERIF = '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif'
+# 単色階調（少→多）。ヒートマップ・量を表す色スケールに共通で使う
+SEQ_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95"]
+
+MEDIA_TYPE_COLOR = {"IMAGE": C_BLUE, "CAROUSEL_ALBUM": C_VIOLET, "VIDEO": C_ORANGE}
 
 st.set_page_config(
-    page_title="Instagram 分析ダッシュボード",
+    page_title="アトリエ分析",
     page_icon="🎨",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-st.markdown("""
-<style>
+# 全チャート共通の plotly テンプレート（背景透過・和紙グリッド・colorway統一）。
+# 各チャート側では高さ・凡例など図固有の設定だけを上書きする。
+pio.templates["atelier"] = go.layout.Template(
+    layout=go.Layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(
+            family='-apple-system, "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif',
+            color=C_INK2, size=12,
+        ),
+        colorway=[C_BLUE, C_ORANGE, C_VIOLET, "#1baf7a", "#e87ba4"],
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis=dict(gridcolor=C_GRID, linecolor=C_LINE, zerolinecolor=C_GRID),
+        yaxis=dict(gridcolor=C_GRID, linecolor=C_LINE, zerolinecolor=C_GRID),
+        hoverlabel=dict(bgcolor=C_INK, font=dict(color=C_PAGE)),
+    )
+)
+px.defaults.template = "atelier"
+
+_CSS_TOKENS = f"""
+:root {{
+    --page: {C_PAGE};
+    --card: {C_CARD};
+    --line: {C_LINE};
+    --ink: {C_INK};
+    --ink2: {C_INK2};
+    --ink3: {C_INK3};
+    --accent: {C_BLUE};
+    --up: {C_UP};
+    --down: {C_DOWN};
+    --serif: {SERIF};
+    --shadow: 0 1px 2px rgba(43, 39, 35, 0.05), 0 4px 14px rgba(43, 39, 35, 0.05);
+}}
+"""
+
+st.markdown("<style>" + _CSS_TOKENS + """
+/* ---- 見出しは明朝 ---- */
+h1, h2, h3 { font-family: var(--serif) !important; letter-spacing: 0.02em; }
+h1 { font-weight: 600 !important; font-size: 1.9rem !important; }
+h2 { font-size: 1.35rem !important; }
+h3 { font-size: 1.15rem !important; }
+
+/* ---- Streamlitのヘッダー（Deploy等）を隠し、上余白を詰める ---- */
+header[data-testid="stHeader"] { display: none; }
+.stMainBlockContainer { padding-top: 1.6rem; }
+
+/* ---- KPIカード（st.metric）を和紙カード化 ---- */
 [data-testid="stMetric"] {
-    background: #fafafa;
-    border: 1px solid #efefef;
-    border-radius: 10px;
-    padding: 14px 18px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
 }
-[data-testid="stMetricValue"] { font-size: 1.6rem; }
+[data-testid="stMetricLabel"] { color: var(--ink2); }
+[data-testid="stMetricValue"] { font-size: 1.55rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* ---- st.container(border=True) も同じカードに ---- */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: var(--card);
+    border: 1px solid var(--line) !important;
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+}
+
+/* ---- expander ---- */
+[data-testid="stExpander"] details {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+}
+
+/* ---- 投稿カード内のサムネイル ---- */
+[data-testid="stImage"] img { border-radius: 10px; }
+
 [data-testid="stSidebar"] { display: none; }
+
+/* ---- 自作HTMLパーツ ---- */
+.atl-eyebrow { font-size: 0.8rem; font-weight: 600; color: var(--ink2); }
+.atl-eyebrow .star { color: var(--accent); }
+.atl-big { font-size: 3.2rem; font-weight: 650; line-height: 1.1; color: var(--ink); }
+.atl-big .unit { font-size: 1.5rem; font-weight: 600; color: var(--ink2); margin-left: 2px; }
+.atl-delta {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 0.8rem; font-weight: 700;
+    border-radius: 999px; padding: 2px 10px;
+}
+.atl-delta .vs { font-weight: 500; color: var(--ink2); }
+.atl-delta.up { color: var(--up); background: rgba(0, 99, 0, 0.08); }
+.atl-delta.down { color: var(--down); background: rgba(192, 67, 56, 0.08); }
+.atl-mrow {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 0.9rem;
+}
+.atl-mrow:last-of-type { border-bottom: none; }
+.atl-mrow .name { color: var(--ink2); }
+.atl-mrow .hint { display: block; font-size: 0.72rem; color: var(--ink3); }
+.atl-mrow .num { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+.atl-mrow .num .atl-delta { font-size: 0.72rem; margin-left: 6px; padding: 1px 7px; }
+.atl-meta { font-size: 0.78rem; color: var(--ink3); display: flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.atl-meta .rank { font-weight: 700; color: var(--ink2); }
+.atl-chip {
+    font-size: 0.7rem; font-weight: 600; color: var(--ink2);
+    background: #f1ebe0; border-radius: 999px; padding: 1px 8px;
+}
+.atl-cap { font-size: 0.88rem; color: var(--ink); margin: 2px 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atl-stats { display: flex; align-items: baseline; gap: 13px; flex-wrap: wrap; font-size: 0.8rem; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.atl-stats .main { font-size: 0.92rem; font-weight: 700; color: var(--ink); display: inline-flex; align-items: center; gap: 5px; }
+.atl-stats .main::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.atl-headline { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.atl-headline .label { font-size: 0.8rem; font-weight: 600; color: var(--ink2); }
+.atl-headline .num { font-size: 1.25rem; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ink); }
+.atl-headline .num .gain { font-size: 0.78rem; font-weight: 600; color: var(--up); margin-left: 4px; }
+.atl-noimg {
+    width: 100%; aspect-ratio: 1; border-radius: 10px;
+    background: #f1ebe0; border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem;
+}
+
+/* ---- スマホ幅: Streamlitはカラムを縦積みにするが、
+       KPIタイル・ヒーロー・投稿カード（画像＋本文）は横並びを維持する ---- */
+@media (max-width: 640px) {
+    [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]),
+    [data-testid="stHorizontalBlock"]:has([data-testid="stImage"]) {
+        flex-wrap: nowrap !important;
+        flex-direction: row !important;
+        gap: 8px;
+    }
+    [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) [data-testid="stColumn"],
+    [data-testid="stHorizontalBlock"]:has([data-testid="stImage"]) [data-testid="stColumn"] {
+        min-width: 0 !important;
+    }
+    [data-testid="stMetric"] { padding: 10px 10px 9px; }
+    [data-testid="stMetricValue"] { font-size: 1.15rem; }
+    [data-testid="stMetricLabel"] { font-size: 0.7rem; }
+    [data-testid="stMetricLabel"] p { white-space: normal !important; line-height: 1.3; }
+    .atl-big { font-size: 2.6rem; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,10 +214,11 @@ HAS_INSIGHTS = (
 )
 
 # -------- ページタイトル --------
-st.title("🎨 Instagram 分析")
+st.title("🖌️ アトリエ分析")
 if not df_profile.empty:
     latest_date = df_profile["date"].iloc[-1].strftime("%Y年%m月%d日")
-    st.caption(f"最終更新: {latest_date}　|　総投稿数: {len(df_media):,}件　|　同じWiFiのスマホからもアクセスできます 📱")
+    followers_str = f"{int(df_profile['followers_count'].iloc[-1]):,}人"
+    st.caption(f"最終更新 {latest_date}　|　総投稿 {len(df_media):,}件　|　フォロワー {followers_str}")
 
 if df_profile.empty and df_media.empty:
     st.error("データが見つかりませんでした。result/ フォルダを確認してください。")
@@ -197,6 +345,109 @@ def _account_nf_rate(df_ai, anchor, days=30, offset=0):
     return float(nf[mask].sum() / r[mask].sum() * 100)
 
 
+def _account_home_rate_peak(df_ai, df_profile, anchor, days=30, offset=0):
+    """アカウント日次インサイトから直近days日の「投稿時ホーム率」のピークを返す。
+    ホーム率 = フォロワーへのリーチ ÷ その日のフォロワー数 × 100。
+    フォロワー別リーチはメディア単位では取れない（v22非対応）ためアカウント日次で算出する。
+    フォロワーリーチは投稿日にスパイクし投稿のない日は残り火（数人）になるため、窓内の
+    最大値（＝最もフォロワーに届いた投稿時の値）を採用する。"""
+    if df_ai.empty or "reach_follower" not in df_ai.columns or df_profile.empty:
+        return None
+    end = anchor - pd.Timedelta(days=offset)
+    start = anchor - pd.Timedelta(days=offset + days)
+    w = df_ai[(df_ai["date"] > start) & (df_ai["date"] <= end)]
+    rf = pd.to_numeric(w["reach_follower"], errors="coerce")
+    best = None
+    for date, val in zip(w["date"], rf):
+        foll = _followers_at(df_profile, date)
+        if pd.isna(val) or not foll:
+            continue
+        rate = float(val) / foll * 100
+        if best is None or rate > best:
+            best = rate
+    return best
+
+
+def _delta_pill(recent, prev, kind, vs="前30日比"):
+    """デルタピル（▲+0.6pt 前30日比）のHTML。比較値が無ければ空文字。"""
+    d = _fmt_delta(recent, prev, kind)
+    if d is None:
+        return ""
+    arrow, cls = ("▲", "up") if recent >= prev else ("▼", "down")
+    vs_html = f' <span class="vs">{vs}</span>' if vs else ""
+    return f'<span class="atl-delta {cls}">{arrow} {d}{vs_html}</span>'
+
+
+def _mrow(name, hint, value, delta_html=""):
+    """「くわしい指標」の1行（名前＋補足＋値＋デルタ）HTML。"""
+    hint_html = f'<span class="hint">{hint}</span>' if hint else ""
+    return (
+        f'<div class="atl-mrow"><span class="name">{name}{hint_html}</span>'
+        f'<span class="num">{value}{delta_html}</span></div>'
+    )
+
+
+SPARK_CONFIG = {"displayModeBar": False}
+
+
+def _monthly_saved_spark(df):
+    """ヒーローカード用: 直近12ヶ月の月別平均保存数スパークライン。データ不足ならNone。"""
+    if df.empty or "saved" not in df.columns or "post_date" not in df.columns:
+        return None
+    d = df[df["saved"].notna() & df["post_date"].notna()]
+    d = d[d["post_date"] >= pd.Timestamp.now() - pd.DateOffset(months=12)].copy()
+    if d.empty:
+        return None
+    d["month"] = d["post_date"].dt.to_period("M").dt.to_timestamp()
+    m = d.groupby("month")["saved"].mean().reset_index()
+    if len(m) < 3:
+        return None
+    fig = go.Figure()
+    fig.add_scatter(
+        x=m["month"], y=m["saved"], mode="lines",
+        line=dict(color=C_BLUE, width=2),
+        fill="tozeroy", fillcolor="rgba(42, 120, 214, 0.10)",
+        hovertemplate="%{x|%Y/%m}　平均保存 %{y:.1f}<extra></extra>",
+    )
+    fig.add_scatter(
+        x=[m["month"].iloc[-1]], y=[m["saved"].iloc[-1]], mode="markers",
+        marker=dict(color=C_BLUE, size=9, line=dict(color=C_CARD, width=2)),
+        hoverinfo="skip",
+    )
+    fig.update_layout(
+        height=120, showlegend=False,
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        margin=dict(l=4, r=10, t=10, b=4),
+    )
+    return fig
+
+
+def _followers_spark(df_profile):
+    """ホームのフォロワー推移ミニカード用スパークライン。"""
+    fig = go.Figure()
+    fig.add_scatter(
+        x=df_profile["date"], y=df_profile["followers_count"], mode="lines",
+        line=dict(color=C_BLUE, width=2),
+        hovertemplate="%{x|%Y/%m/%d}　%{y:,}人<extra></extra>",
+    )
+    fig.add_scatter(
+        x=[df_profile["date"].iloc[-1]], y=[df_profile["followers_count"].iloc[-1]],
+        mode="markers",
+        marker=dict(color=C_BLUE, size=9, line=dict(color=C_CARD, width=2)),
+        hoverinfo="skip",
+    )
+    fig.update_layout(
+        height=150, showlegend=False,
+        xaxis=dict(
+            showgrid=False, tickformat="%Y/%m", nticks=4,
+            tickfont=dict(size=10, color=C_INK3), linecolor=C_LINE,
+        ),
+        yaxis=dict(visible=False),
+        margin=dict(l=4, r=10, t=10, b=4),
+    )
+    return fig
+
+
 _now = pd.Timestamp.now().normalize()
 win_recent = _window_slice(df_media, _now, days=30, offset=0)
 win_prev = _window_slice(df_media, _now, days=30, offset=30)
@@ -209,6 +460,8 @@ pv_now, _ = _window_mean(win_recent, "profile_visits")
 pv_prev, _ = _window_mean(win_prev, "profile_visits")
 nf_now = _account_nf_rate(df_account_insights, _now, days=30, offset=0)
 nf_prev = _account_nf_rate(df_account_insights, _now, days=30, offset=30)
+hr_now = _account_home_rate_peak(df_account_insights, df_profile, _now, days=30, offset=0)
+hr_prev = _account_home_rate_peak(df_account_insights, df_profile, _now, days=30, offset=30)
 eng_now, _ = _window_engagement_rate(win_recent)
 eng_prev, _ = _window_engagement_rate(win_prev)
 sh_now, _ = _window_mean(win_recent, "shares")
@@ -232,7 +485,7 @@ if not df_profile.empty:
 
 # 投稿提案サマリ（全タブ共通、全期間データ）
 summary = build_summary(df_media, df_competitors, df_hashtags)
-PRED_COLOR = {"高": "#E1306C", "中": "#F56040", "低": "#9e9e9e"}
+PRED_COLOR = {"高": C_BLUE, "中": C_ORANGE, "低": C_INK3}
 
 # -------- 4タブ --------
 tab_home, tab_trend, tab_detail, tab_idea = st.tabs(
@@ -243,56 +496,91 @@ tab_home, tab_trend, tab_detail, tab_idea = st.tabs(
 # タブ1: ホーム
 # ========================================
 with tab_home:
-    # === 重視KPI（直近30日固定） ===
-    st.markdown("##### 🎯 直近30日の重視KPI（前30日比）　— 発見 → 保存 → プロフィール訪問 → フォロー")
-    k1, k2, k3, k4 = st.columns(4)
+    # === 北極星: 保存率ヒーローカード ===
+    with st.container(border=True):
+        hero_l, hero_r = st.columns([1, 1.25], vertical_alignment="center")
+        with hero_l:
+            st.markdown(
+                '<div class="atl-eyebrow"><span class="star">◆</span> 保存率（北極星）　直近30日</div>'
+                f'<div class="atl-big">{_val(sr_now, lambda v: f"{v:.2f}")}<span class="unit">%</span></div>'
+                f'<div>{_delta_pill(sr_now, sr_prev, "pt")}</div>',
+                unsafe_allow_html=True,
+            )
+        with hero_r:
+            fig_spark = _monthly_saved_spark(df_media) if HAS_INSIGHTS else None
+            if fig_spark is not None:
+                st.markdown('<div class="atl-eyebrow">月別の平均保存数（12ヶ月）</div>', unsafe_allow_html=True)
+                st.plotly_chart(fig_spark, use_container_width=True, config=SPARK_CONFIG)
+        if HAS_INSIGHTS:
+            st.caption(
+                f"保存数の合計 ÷ リーチの合計（リーチ加重）。直近30日の投稿 {n_recent} 件"
+                f"（前30日は {n_prev} 件）から算出・前30日比。1%超で優秀。"
+            )
+        else:
+            st.caption(
+                "💡 `python src/collect_insights.py` でリーチ・保存・プロフィール訪問を収集すると、"
+                "保存率などの重視KPIが表示されます。"
+            )
 
-    _kpi(k1, "🔖 保存率", sr_now, lambda v: f"{v:.2f}%",
-         recent=sr_now, prev=sr_prev, delta_kind="pt",
-         help_text="保存数の合計 ÷ リーチの合計（リーチ加重）。作品が刺さった最良のシグナル。1%超で優秀。"
-                   if HAS_INSIGHTS else "`python src/collect_insights.py` でインサイトを収集すると表示されます")
-    _kpi(k2, "👀 平均リーチ", reach_now, lambda v: f"{v:,.0f}",
+    # === 重視KPI（直近30日・3タイル） ===
+    k1, k2, k3 = st.columns(3)
+    _kpi(k1, "👀 平均リーチ", reach_now, lambda v: f"{v:,.0f}",
          recent=reach_now, prev=reach_prev, delta_kind="int",
          help_text="1投稿が届いた人数の平均。リール・保存・シェアで新規の発見が増えます。")
-    _kpi(k3, "🏠 平均プロフィール訪問", pv_now, lambda v: f"{v:,.1f}",
+    _kpi(k2, "🏠 プロフィール訪問（平均）", pv_now, lambda v: f"{v:,.1f}",
          recent=pv_now, prev=pv_prev, delta_kind="float1",
          help_text="投稿を見てプロフィールに来た数（投稿あたり平均）。販売・受注の入口。")
-    _kpi(k4, "📈 フォロワー純増", gain_now, lambda v: f"{v:+,}",
+    _kpi(k3, "📈 フォロワー純増", gain_now, lambda v: f"{v:+,}",
          recent=gain_now, prev=gain_prev, delta_kind="int",
          help_text="直近30日のフォロワー純増。デルタは前30日の純増との差。")
-
-    # === 補助KPI ===
-    s1, s2, s3, s4 = st.columns(4)
-    _kpi(s1, "🆕 フォロワー外リーチ比率", nf_now, lambda v: f"{v:.0f}%",
-         recent=nf_now, prev=nf_prev, delta_kind="pt",
-         help_text="フォロワー以外に届いたリーチの割合（リーチ加重）。リールで伸ばせます。")
-    _kpi(s2, "👥 フォロワー数", latest_followers, lambda v: f"{v:,}")
-    _kpi(s3, "💬 エンゲージ率（リーチ基準）", eng_now, lambda v: f"{v:.2f}%",
-         recent=eng_now, prev=eng_prev, delta_kind="pt",
-         help_text="(いいね＋コメント) の合計 ÷ リーチの合計。")
-    _kpi(s4, "🔁 平均シェア数", sh_now, lambda v: f"{v:,.1f}",
-         recent=sh_now, prev=sh_prev, delta_kind="float1",
-         help_text="ストーリーズ/DMでの共有（投稿あたり平均）。")
-
-    st.caption(
-        f"※ 上段KPIは**直近30日**の投稿 {n_recent} 件（前30日は {n_prev} 件）から算出・前30日比。"
-        "比率はリーチ加重。フォロワー純増は最新−30日前。"
-    )
-    if not df_account_insights.empty:
-        last = df_account_insights.iloc[-1]
-        st.caption(
-            f"🔗 直近のアカウント全体: プロフィールアクセス {int(last['profile_views']):,} ／ "
-            f"リンククリック {int(last['website_clicks'])} 回（{last['date'].strftime('%m月%d日')}時点）"
-        )
-    if not HAS_INSIGHTS:
-        st.caption(
-            "💡 `python src/collect_insights.py` でリーチ・保存・プロフィール訪問を収集すると、"
-            "上段の重視KPI（保存率・リーチ・プロフィール訪問など）が表示されます。"
-        )
-    elif n_recent == 0:
+    if HAS_INSIGHTS and n_recent == 0:
         st.caption(
             "⚠️ 直近30日にインサイト付きの投稿がありません。`python src/collect_insights.py` でインサイトを更新してください。"
         )
+
+    # === 補助KPI（折りたたみ） ===
+    # ホーム率（フォロワー浸透＝土台）→ フォロワー外リーチ比率（新規拡散＝成長）の順に並べる。
+    with st.expander("🔍 くわしい指標（ホーム率・フォロワー外リーチなど）"):
+        detail_rows = [
+            _mrow("🏠 ホーム率（投稿時）",
+                  "投稿がフォロワーに届いた割合の30日ピーク（フォロワーへのリーチ÷フォロワー数）",
+                  _val(hr_now, lambda v: f"{v:.1f}%"),
+                  _delta_pill(hr_now, hr_prev, "pt", vs="")),
+            _mrow("🆕 フォロワー外リーチ比率",
+                  "新規との出会い（リーチ加重）。リールで伸ばせる。ホーム率が下がると自動的に上がる点に注意",
+                  _val(nf_now, lambda v: f"{v:.0f}%"),
+                  _delta_pill(nf_now, nf_prev, "pt", vs="")),
+            _mrow("💬 エンゲージ率（リーチ基準）",
+                  "(いいね＋コメント) の合計 ÷ リーチの合計",
+                  _val(eng_now, lambda v: f"{v:.2f}%"),
+                  _delta_pill(eng_now, eng_prev, "pt", vs="")),
+            _mrow("🔁 平均シェア数",
+                  "ストーリーズ/DMでの共有（投稿あたり平均）",
+                  _val(sh_now, lambda v: f"{v:,.1f}"),
+                  _delta_pill(sh_now, sh_prev, "float1", vs="")),
+        ]
+        if not df_account_insights.empty:
+            last = df_account_insights.iloc[-1]
+            detail_rows.append(_mrow(
+                f"🔗 アカウント全体（{last['date'].strftime('%m/%d')}時点）",
+                "プロフィールアクセス ／ リンククリック",
+                f"{int(last['profile_views']):,} ／ {int(last['website_clicks'])}回",
+            ))
+        st.markdown("".join(detail_rows), unsafe_allow_html=True)
+        st.caption("※ 直近30日・前30日比。比率はリーチ加重（保存率と同じ集計方式）。")
+
+    # === フォロワー推移ミニカード（詳細はトレンドタブ） ===
+    if not df_profile.empty:
+        with st.container(border=True):
+            gain_total = latest_followers - int(df_profile["followers_count"].iloc[0])
+            gain_color = C_UP if gain_total >= 0 else C_DOWN
+            st.markdown(
+                '<div class="atl-headline"><span class="label">👥 フォロワー数の推移（全期間）</span>'
+                f'<span class="num">{latest_followers:,}'
+                f'<span class="gain" style="color:{gain_color}">{gain_total:+,}</span></span></div>',
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(_followers_spark(df_profile), use_container_width=True, config=SPARK_CONFIG)
 
     st.divider()
 
@@ -337,7 +625,7 @@ with tab_home:
                           "「今効く型」を見るには期間を絞って比較します。",
             )
         with ctrl_r:
-            n_show = st.select_slider("表示件数", options=[6, 9, 12, 18, 24, 30], value=12)
+            n_show = st.select_slider("表示件数", options=[6, 9, 12, 18, 24, 30], value=6)
 
         # 期間で絞り、その期間の地合い（m・C）で調整保存率を再計算する
         df_list = _period_window(df_media, period_months)
@@ -353,35 +641,48 @@ with tab_home:
         df_sorted = df_list.sort_values(sort_col, ascending=False, na_position="last")
         posts = df_sorted.head(n_show).reset_index(drop=True)
 
-        for i in range(0, len(posts), 5):
-            cols = st.columns(5)
-            for j in range(5):
-                idx = i + j
-                if idx >= len(posts):
-                    break
-                row = posts.iloc[idx]
-                with cols[j]:
+        for rank, (_, row) in enumerate(posts.iterrows(), 1):
+            with st.container(border=True):
+                col_img, col_body = st.columns([1, 3.6], vertical_alignment="center")
+                with col_img:
                     url = str(row.get("media_url", ""))
                     if url.startswith("http"):
                         st.image(url, use_container_width=True)
                     else:
-                        st.markdown("🖼️ *画像なし*")
-
+                        st.markdown('<div class="atl-noimg">🖼️</div>', unsafe_allow_html=True)
+                with col_body:
                     date_str = row["timestamp_jst"].strftime("%Y/%m/%d")
                     type_ja = MEDIA_TYPE_JA.get(row["media_type"], row["media_type"])
-                    st.markdown(f"**{date_str}**　`{type_ja}`")
+                    cap_lines = str(row.get("caption") or "").strip().splitlines()
+                    cap_line = html.escape(cap_lines[0][:60]) if cap_lines else ""
 
+                    stat_parts = []
+                    if pd.notna(row.get("saved_rate_adj")):
+                        stat_parts.append(f'<span class="main">保存率 {row["saved_rate_adj"]:.2f}%</span>')
+                    if HAS_INSIGHTS and pd.notna(row.get("reach")):
+                        if pd.notna(row.get("saved")):
+                            stat_parts.append(f"🔖 {int(row['saved'])}")
+                        stat_parts.append(f"👀 {int(row['reach']):,}")
+                        if pd.notna(row.get("shares")) and int(row["shares"]) > 0:
+                            stat_parts.append(f"🔁 {int(row['shares'])}")
+                        if pd.notna(row.get("views")):
+                            stat_parts.append(f"▶️ {int(row['views']):,}")
+                    stat_parts.append(f"❤️ {int(row['like_count']):,}")
+                    if int(row["comments_count"]) > 0:
+                        stat_parts.append(f"💬 {int(row['comments_count']):,}")
                     eng_val = row.get("total_engagement_rate")
                     if pd.isna(eng_val):
                         eng_val = row.get("engagement_rate")
-                    eng_str = f"　📊 {eng_val:.1f}%" if pd.notna(eng_val) else ""
-                    st.caption(f"❤️ {int(row['like_count']):,}　💬 {int(row['comments_count']):,}{eng_str}")
+                    if pd.notna(eng_val):
+                        stat_parts.append(f"📊 {eng_val:.1f}%")
 
-                    if HAS_INSIGHTS and pd.notna(row.get("reach")):
-                        ins_parts = [f"👀 {int(row['reach']):,}", f"🔖 {int(row['saved'])}", f"🔁 {int(row['shares'])}"]
-                        if pd.notna(row.get("views")):
-                            ins_parts.append(f"▶️ {int(row['views']):,}")
-                        st.caption("　".join(ins_parts))
+                    st.markdown(
+                        f'<div class="atl-meta"><span class="rank">{rank}</span>'
+                        f'<span>{date_str}</span><span class="atl-chip">{type_ja}</span></div>'
+                        + (f'<div class="atl-cap">{cap_line}</div>' if cap_line else "")
+                        + f'<div class="atl-stats">{"".join(f"<span>{p}</span>" for p in stat_parts)}</div>',
+                        unsafe_allow_html=True,
+                    )
 
         st.caption("※ Instagram のCDN画像は有効期限があります。古い投稿は表示されない場合があります。")
     else:
@@ -403,14 +704,8 @@ with tab_trend:
             labels={"date": "日付", "followers_count": "フォロワー数"},
             markers=True,
         )
-        fig_fw.update_traces(line_color="#E1306C", marker_color="#E1306C", marker_size=5)
-        fig_fw.update_layout(
-            plot_bgcolor="white",
-            hovermode="x unified",
-            yaxis=dict(gridcolor="#f5f5f5"),
-            xaxis=dict(gridcolor="#f5f5f5"),
-            margin=dict(l=0, r=0, t=10, b=0),
-        )
+        fig_fw.update_traces(line_color=C_BLUE, marker_color=C_BLUE, marker_size=5)
+        fig_fw.update_layout(hovermode="x unified")
         st.plotly_chart(fig_fw, use_container_width=True)
     else:
         st.info("プロフィールデータがまだありません（`python src/collect.py` を実行してください）")
@@ -432,14 +727,8 @@ with tab_trend:
             y="累積投稿数",
             labels={"post_date": "投稿日"},
         )
-        fig_cum.update_traces(line_color="#833AB4", line_width=2)
-        fig_cum.update_layout(
-            plot_bgcolor="white",
-            hovermode="x unified",
-            yaxis=dict(gridcolor="#f5f5f5"),
-            xaxis=dict(gridcolor="#f5f5f5"),
-            margin=dict(l=0, r=0, t=10, b=0),
-        )
+        fig_cum.update_traces(line_color=C_VIOLET, line_width=2)
+        fig_cum.update_layout(hovermode="x unified")
         st.plotly_chart(fig_cum, use_container_width=True)
         st.caption(f"現在の累積投稿数: {len(df_media):,} 件")
     else:
@@ -468,12 +757,8 @@ with tab_trend:
                     labels={"month": "月", "平均リーチ": "平均リーチ数"},
                     markers=True,
                 )
-                fig_mr.update_traces(line_color="#E1306C", marker_color="#E1306C", marker_size=6)
-                fig_mr.update_layout(
-                    plot_bgcolor="white", hovermode="x unified",
-                    yaxis=dict(gridcolor="#f5f5f5"), xaxis=dict(gridcolor="#f5f5f5"),
-                    margin=dict(l=0, r=0, t=10, b=0),
-                )
+                fig_mr.update_traces(line_color=C_BLUE, marker_color=C_BLUE, marker_size=6)
+                fig_mr.update_layout(hovermode="x unified")
                 st.plotly_chart(fig_mr, use_container_width=True)
             with col_m2:
                 fig_ms = px.line(
@@ -481,12 +766,8 @@ with tab_trend:
                     labels={"month": "月", "平均保存数": "平均保存数"},
                     markers=True,
                 )
-                fig_ms.update_traces(line_color="#F56040", marker_color="#F56040", marker_size=6)
-                fig_ms.update_layout(
-                    plot_bgcolor="white", hovermode="x unified",
-                    yaxis=dict(gridcolor="#f5f5f5"), xaxis=dict(gridcolor="#f5f5f5"),
-                    margin=dict(l=0, r=0, t=10, b=0),
-                )
+                fig_ms.update_traces(line_color=C_ORANGE, marker_color=C_ORANGE, marker_size=6)
+                fig_ms.update_layout(hovermode="x unified")
                 st.plotly_chart(fig_ms, use_container_width=True)
         else:
             st.info("インサイト付きの投稿データがありません")
@@ -516,13 +797,7 @@ with tab_trend:
                 labels={"date": "日付", "値": "件数"},
                 markers=True,
             )
-            fig_ai.update_layout(
-                plot_bgcolor="white",
-                hovermode="x unified",
-                yaxis=dict(gridcolor="#f5f5f5"),
-                xaxis=dict(gridcolor="#f5f5f5"),
-                margin=dict(l=0, r=0, t=10, b=0),
-            )
+            fig_ai.update_layout(hovermode="x unified")
             st.plotly_chart(fig_ai, use_container_width=True)
             st.caption("日次cronで毎日 `run.sh` を実行すると蓄積されていきます。")
         else:
@@ -580,12 +855,12 @@ with tab_detail:
                     fig_t = px.bar(
                         type_ins, x="タイプ", y=metric, text=metric,
                         color="タイプ",
-                        color_discrete_sequence=list(MEDIA_TYPE_COLOR.values()),
+                        color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
                         title=f"タイプ別 {metric}",
                     )
                     fmt = ":.0f" if "リーチ" in metric else ":.1f"
                     fig_t.update_traces(texttemplate=f"%{{text{fmt}}}", textposition="outside")
-                    fig_t.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
+                    fig_t.update_layout(showlegend=False, margin=dict(t=40))
                     st.plotly_chart(fig_t, use_container_width=True)
 
             st.dataframe(
@@ -603,10 +878,10 @@ with tab_detail:
             type_stats["タイプ"] = type_stats["media_type"].map(MEDIA_TYPE_JA).fillna(type_stats["media_type"])
             fig_fb = px.bar(
                 type_stats, x="タイプ", y="平均いいね数", text="平均いいね数", color="タイプ",
-                color_discrete_sequence=list(MEDIA_TYPE_COLOR.values()),
+                color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
             )
             fig_fb.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-            fig_fb.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=10, b=0))
+            fig_fb.update_layout(showlegend=False)
             st.plotly_chart(fig_fb, use_container_width=True)
         else:
             st.info("データがありません")
@@ -634,10 +909,9 @@ with tab_detail:
             fig_heat = px.imshow(
                 pivot,
                 labels={"x": "時間帯 (JST)", "y": "曜日", "color": pivot_label},
-                color_continuous_scale="RdPu",
+                color_continuous_scale=SEQ_BLUE,
                 aspect="auto",
             )
-            fig_heat.update_layout(margin=dict(l=0, r=0, t=10, b=0))
             st.plotly_chart(fig_heat, use_container_width=True)
             st.caption("※ 投稿数が少ない時間帯は参考程度にご覧ください")
         else:
@@ -656,7 +930,6 @@ with tab_detail:
                 labels={"timestamp_jst": "投稿日時", "reach": "リーチ数", "type_ja": "タイプ"},
                 color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
             )
-            fig_r.update_layout(plot_bgcolor="white", yaxis=dict(gridcolor="#f5f5f5"), margin=dict(l=0, r=0, t=10, b=0))
             st.plotly_chart(fig_r, use_container_width=True)
 
             has_nf = "non_follower_reach_rate" in df_ri.columns and df_ri["non_follower_reach_rate"].notna().any()
@@ -673,10 +946,6 @@ with tab_detail:
                         "type_ja": "タイプ",
                     },
                     color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
-                )
-                fig_nf.update_layout(
-                    plot_bgcolor="white", yaxis=dict(gridcolor="#f5f5f5"),
-                    margin=dict(l=0, r=0, t=10, b=0),
                 )
                 st.plotly_chart(fig_nf, use_container_width=True)
                 avg_nf = df_nf["non_follower_reach_rate"].mean()
@@ -735,12 +1004,9 @@ with tab_detail:
                         y="ハッシュタグ",
                         orientation="h",
                         color=rank_label,
-                        color_continuous_scale="RdPu",
+                        color_continuous_scale=SEQ_BLUE,
                     )
-                    fig_h1.update_layout(
-                        plot_bgcolor="white", coloraxis_showscale=False,
-                        height=520, margin=dict(l=0, r=0, t=10, b=0),
-                    )
+                    fig_h1.update_layout(coloraxis_showscale=False, height=520)
                     st.plotly_chart(fig_h1, use_container_width=True)
 
                 with tab_h2:
@@ -752,12 +1018,9 @@ with tab_detail:
                         y="ハッシュタグ",
                         orientation="h",
                         color="使用回数",
-                        color_continuous_scale="PuRd",
+                        color_continuous_scale=SEQ_BLUE,
                     )
-                    fig_h2.update_layout(
-                        plot_bgcolor="white", coloraxis_showscale=False,
-                        height=520, margin=dict(l=0, r=0, t=10, b=0),
-                    )
+                    fig_h2.update_layout(coloraxis_showscale=False, height=520)
                     st.plotly_chart(fig_h2, use_container_width=True)
             else:
                 st.info("ハッシュタグデータがありません")
@@ -804,13 +1067,10 @@ with tab_detail:
                             labels={"band": info["label"], "avg": f"平均{metric_label}"},
                             title=info["label"],
                             color="band",
-                            color_discrete_sequence=["#c5cae9", "#9fa8da", "#7986cb", "#5c6bc0", "#E1306C"],
+                            color_discrete_sequence=SEQ_BLUE[1:],
                         )
                         fig_v.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-                        fig_v.update_layout(
-                            plot_bgcolor="white", showlegend=False,
-                            margin=dict(l=0, r=0, t=40, b=0), height=260,
-                        )
+                        fig_v.update_layout(showlegend=False, margin=dict(t=40), height=260)
                         st.plotly_chart(fig_v, use_container_width=True)
 
             dc = va.get("dominant_color") or {}
@@ -820,13 +1080,10 @@ with tab_detail:
                 fig_c = px.bar(
                     dfc, x="color", y="avg", text="avg",
                     labels={"color": "主要色", "avg": f"平均{metric_label}"},
-                    color="avg", color_continuous_scale="RdPu",
+                    color="avg", color_continuous_scale=SEQ_BLUE,
                 )
                 fig_c.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-                fig_c.update_layout(
-                    plot_bgcolor="white", coloraxis_showscale=False,
-                    margin=dict(l=0, r=0, t=10, b=0), height=320,
-                )
+                fig_c.update_layout(coloraxis_showscale=False, height=320)
                 st.plotly_chart(fig_c, use_container_width=True)
             st.caption(
                 "※ 件数が少ない帯は参考程度に。IGの表示画像（中央クロップされることあり）を基準にしています。"
@@ -938,8 +1195,8 @@ with tab_idea:
                     labels={"band": "キャプション長", "avg": "平均エンゲージ"},
                     title="キャプション長 × 反応",
                 )
-                fig_cl.update_traces(marker_color="#833AB4")
-                fig_cl.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0), height=300)
+                fig_cl.update_traces(marker_color=C_VIOLET)
+                fig_cl.update_layout(showlegend=False, margin=dict(t=40), height=300)
                 st.plotly_chart(fig_cl, use_container_width=True)
         with detail_r:
             if hc.get("ranking"):
@@ -949,8 +1206,8 @@ with tab_idea:
                     labels={"band": "ハッシュタグ数", "avg": "平均エンゲージ"},
                     title="ハッシュタグ数 × 反応",
                 )
-                fig_hc.update_traces(marker_color="#E1306C")
-                fig_hc.update_layout(plot_bgcolor="white", showlegend=False, margin=dict(l=0, r=0, t=40, b=0), height=300)
+                fig_hc.update_traces(marker_color=C_BLUE)
+                fig_hc.update_layout(showlegend=False, margin=dict(t=40), height=300)
                 st.plotly_chart(fig_hc, use_container_width=True)
 
     # --- 避けたい条件 ---
@@ -999,7 +1256,7 @@ with tab_idea:
             st.caption(f"生成日時: {result.get('generated_at', '—')}　|　モデル: {result.get('model', '—')}")
             suggestions = result.get("suggestions", [])
             for i, sug in enumerate(suggestions, 1):
-                color = PRED_COLOR.get(sug.get("predicted_level", "中"), "#F56040")
+                color = PRED_COLOR.get(sug.get("predicted_level", "中"), C_ORANGE)
                 with st.container(border=True):
                     head_l, head_r = st.columns([4, 1])
                     with head_l:
