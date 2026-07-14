@@ -64,7 +64,8 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 実行すると `result/` 配下にCSVが保存される：
 - `{TARGET_USER_ID}-profile-{today}.csv` — プロフィール情報（フォロワー数・フォロー数・投稿数など）
 - `{TARGET_USER_ID}_{today}.csv` — 投稿一覧（**id**・メディアURL・キャプション・ハッシュタグ・いいね数・コメント数・メディアタイプ）
-- `insights/{IG_USER_ID}_media_insights_{today}.csv` — 投稿ID別インサイト（reach/**reach_follower/reach_non_follower**/saved/shares/total_interactions/profile_visits/views）
+- `insights/{IG_USER_ID}_media_insights_{today}.csv` — 投稿ID別インサイト（reach/saved/shares/total_interactions/profile_visits/views）。
+  **注: `reach_follower`／`reach_non_follower` の列はあるが常に空。メディア単位の follower_type 分解は v22.0 で非対応（`#100 Incompatible breakdowns`）。フォロワー外リーチはアカウント日次インサイトでのみ取得できる。**
 - `insights/{IG_USER_ID}_account_insights_{today}.csv` — アカウント日次インサイト（profile_views/website_clicks/reach/accounts_engaged/**reach_follower/reach_non_follower**）
 - `visual/{TARGET_USER_ID}_visual_{today}.csv` — 投稿ID別の視覚特徴（brightness/saturation/contrast/colorfulness/warm_ratio/**dominant_color**/whitespace_ratio/edge_density/palette_size/sharpness）。画像ファイルは保存せず数値特徴のみキャッシュ
 - `competitors/{username}-profile-{today}.csv` / `competitors/{username}_{today}.csv` — 競合のプロフィール・投稿
@@ -90,13 +91,16 @@ python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
   （IMAGE/CAROUSEL: reach,saved,shares,total_interactions,profile_visits ／ VIDEO/REELS: …+views）。
   タイプ非対応の `#100` エラー時は CORE_METRICS（reach,saved,shares）でフォールバック。
 - `_request_reach_breakdown()` — **フォロワー外リーチ**（発見＝新規との出会いの指標）を取得。`reach` を
-  `breakdown=follower_type&metric_type=total_value` で分解し `reach_follower`／`reach_non_follower` を得る。
-  他メトリックと混在できないため reach 専用の追加リクエストとして発行（メディア・アカウント共用）。
-  非対応・エラー時は None で握りつぶし、その投稿は欠損のまま。`--no-breakdown` で省略可（リクエスト数を半減）。
+  `breakdown=follow_type&metric_type=total_value` で分解し `reach_follower`／`reach_non_follower` を得る。
+  他メトリックと混在できないため reach 専用の追加リクエストとして発行。
+  **アカウントレベル（`/{ig-user-id}/insights`・`period=day` 必須）専用。メディア単位は v22.0 で非対応（`#100`）なので
+  `fetch_media_insights` は breakdown を発行せず、`with_breakdown` 引数は実質no-op（媒体別 reach_non_follower は常に欠損）。**
+  非対応・エラー時は None で握りつぶす。`--no-breakdown` でアカウント側の分解も省略可。
 - `fetch_account_insights()` — `/{IG_USER_ID}/insights?...&metric_type=total_value` でアカウント日次インサイト。
-  当日 reach の follower_type 分解（`period=day`）もマージする。
+  当日 reach の follower_type 分解（`period=day`）もマージする。**フォロワー外リーチが実際に貯まるのはここだけ**なので、
+  推移を見るには日次cron（`run.sh`）の継続が必須。
 - レート制限対策：デフォルトは直近200件のみ。`--all` で全件、`--limit N` で件数指定、`--sleep` でウェイト調整。
-  **breakdown 有効時はメディア1件あたり2リクエストになる**ため、件数が多い場合は `--no-breakdown` か `--limit` を併用。
+  breakdown のリクエストはアカウント側の1回のみ（メディア1件あたりは常に1リクエスト）。
 
 ### 視覚特徴収集（`src/collect_visual.py`）
 

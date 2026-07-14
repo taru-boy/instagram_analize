@@ -189,9 +189,10 @@ def fetch_media_insights(
     """
     1メディア分のインサイトを取得して {metric_name: value} の辞書で返す。
     タイプ非対応メトリックで #100 が出た場合は CORE_METRICS でリトライする。
-    with_breakdown=True のときは reach を follower_type で分解した
-    reach_follower / reach_non_follower も追加で取得してマージする
-    （取得できない投稿はキー無し＝後段で欠損になる）。
+    注: メディア単位の follower_type 分解は v22.0 で非対応（#100 Incompatible
+    breakdowns）のため、reach_follower / reach_non_follower はここでは取得しない
+    （アカウントレベルの fetch_account_insights でのみ取得する）。`with_breakdown`
+    は API 互換のため受けるだけで、メディア単位では実質no-op。
     """
     metrics = MEDIA_METRICS.get(media_type, CORE_METRICS)
     result = _request_media_insights(version, media_id, metrics, access_token)
