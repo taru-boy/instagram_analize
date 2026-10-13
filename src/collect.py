@@ -1,6 +1,7 @@
 # 必要なモジュールをimport
 import os
 import re
+import sys
 from datetime import datetime as dt
 
 import pandas as pd
@@ -14,7 +15,9 @@ def main():
     """
     env = load_env()
     path = os.path.join(env.base_dir, "result")
-    collect_account(env.version, env.ig_user_id, env.target_user_id, env.access_token, today_str(), path)
+    ok = collect_account(env.version, env.ig_user_id, env.target_user_id, env.access_token, today_str(), path)
+    # 失敗を run.sh（cron）が検知して通知できるよう、終了コードで返す
+    sys.exit(0 if ok else 1)
 
 
 def collect_account(
@@ -88,34 +91,28 @@ def collect_account(
     ensure_dir(out_dir)
     df_profile.to_csv(f"{out_dir}/{user_id}-profile-{today}.csv")
 
-    # メディア情報の取り出し
-    media_data = df_profile["media.data"][0]
+    # メディア情報の取り出し（初回レスポンス分）
+    media_data = list(df_profile["media.data"][0])
 
-    # データフレームを作るための空の辞書を作成
-    data_dict = make_dict()
-
-    # after_keyがあれば、追加でデータを取得
+    # after_keyが無くなるまでページ送りして残りを全件取得する
+    # （1回だけだと 初回25件＋1000件 で頭打ちになり、古い投稿が黙って欠落するため）
     after_key = get_after_key(account_dict)
-
-    # after_keyがある場合
-    if after_key:
-        # 追加でデータを取得する
+    while after_key:
         pagenate_dict = pagenate(version, ig_user_id, user_id, access_token, after_key)
-        pagenate_data = pagenate_dict["business_discovery"]["media"]["data"]
+        if "error" in pagenate_dict:
+            print(f"{user_id} のページ送りでエラー: {pagenate_dict['error']}")
+            return False
+        page_data = pagenate_dict["business_discovery"]["media"].get("data", [])
+        if not page_data:
+            break
+        media_data.extend(page_data)
+        next_key = get_after_key(pagenate_dict)
+        # 最終ページでも after カーソルが返ることがあるため、進まなければ打ち切る
+        after_key = next_key if next_key != after_key else ""
 
-        df1 = make_df(media_data=media_data, data_dict=data_dict)
-        df2 = make_df(media_data=pagenate_data, data_dict=data_dict)
-
-        # concatを使って先に作成したデータフレームと結合する
-        df = pd.concat([df1, df2])
-
-        # インデックスを振りなおす
-        df.reset_index(inplace=True, drop=True)
-
-    # after_keyがない場合　そのままデータフレームを作成
-    else:
-        print("after_keyがありませんでした。")
-        df = make_df(media_data=media_data, data_dict=data_dict)
+    # 呼び出しごとに make_dict() で新しい辞書を渡す（共有すると前回分が重複して残る）
+    df = make_df(media_data=media_data, data_dict=make_dict())
+    df = df.drop_duplicates("id").reset_index(drop=True)
 
     df.to_csv(f"{out_dir}/{user_id}_{today}.csv")
     print(f"{user_id} の収集が完了しました。")

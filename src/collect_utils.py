@@ -29,10 +29,21 @@ def load_env() -> Env:
     )
 
 
+# Graph API の応答待ち上限（秒）。無いと cron が無限に固まりうる。
+API_TIMEOUT = 60
+
+
 def api_get(url: str) -> dict:
-    """Graph API を GET して JSON を dict で返す。"""
-    r = requests.get(url)
-    return json.loads(r.content)
+    """
+    Graph API を GET して JSON を dict で返す。
+    通信エラー・タイムアウト・JSON でない応答は、API エラーと同じ
+    {"error": {...}} 形式で返す（呼び出し側は "error" キーだけ見ればよい）。
+    """
+    try:
+        r = requests.get(url, timeout=API_TIMEOUT)
+        return json.loads(r.content)
+    except (requests.RequestException, ValueError) as e:
+        return {"error": {"message": f"{type(e).__name__}: {e}", "code": "network"}}
 
 
 def today_str() -> str:

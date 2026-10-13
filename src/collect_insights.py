@@ -26,6 +26,7 @@ collect.py が使う Business Discovery API は like/comment しか返さない�
 
 import argparse
 import os
+import sys
 import time
 
 import pandas as pd
@@ -81,7 +82,7 @@ def main():
 
     if not all([access_token, version, ig_user_id]):
         print("ACCESS_TOKEN / VERSION / IG_USER_ID が .env にありません。")
-        return
+        sys.exit(1)
 
     today = today_str()
     out_dir = os.path.join(env.base_dir, "result", "insights")
@@ -92,6 +93,10 @@ def main():
     # --- メディア別インサイト ---
     media_list = fetch_media_list(version, ig_user_id, access_token, limit, args.sleep)
     print(f"対象メディア: {len(media_list)} 件")
+    if not media_list:
+        # トークン失効（#190）・API制限（#4）など。空のCSVを書かずに失敗として終える
+        print("メディア一覧が取得できなかったため中断します。")
+        sys.exit(1)
 
     rows = []
     for i, media in enumerate(media_list, 1):
@@ -135,6 +140,7 @@ def main():
         print(f"アカウント別インサイトを保存: {account_path}")
     else:
         print("アカウント別インサイトの取得に失敗しました。")
+        sys.exit(1)
 
     print("インサイト収集が完了しました。")
 
