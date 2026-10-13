@@ -11,11 +11,8 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_loader import (DAY_JA, add_saved_rate_adj,
                          load_account_insights_data, load_competitor_data,
-                         load_hashtag_data, load_insights_data,
-                         load_media_data, load_profile_data,
-                         load_visual_data, merge_follower_at_post_date,
-                         merge_insights, merge_visual)
-from insights import (MEDIA_TYPE_JA, build_summary,
+                         load_hashtag_data, load_merged_media)
+from insights import (MEDIA_TYPE_JA, build_summary, this_week_actions,
                       visual_engagement_analysis)
 
 RESULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "result")
@@ -189,16 +186,7 @@ header[data-testid="stHeader"] { display: none; }
 
 @st.cache_data(ttl=3600)
 def load_all_data():
-    df_profile = load_profile_data(RESULT_DIR)
-    df_media = load_media_data(RESULT_DIR)
-    if not df_media.empty and not df_profile.empty:
-        df_media = merge_follower_at_post_date(df_media, df_profile)
-    df_insights = load_insights_data(RESULT_DIR)
-    if not df_media.empty:
-        df_media = merge_insights(df_media, df_insights)
-    df_visual = load_visual_data(RESULT_DIR)
-    if not df_media.empty:
-        df_media = merge_visual(df_media, df_visual)
+    df_profile, df_media = load_merged_media(RESULT_DIR)
     df_account_insights = load_account_insights_data(RESULT_DIR)
     df_competitors = load_competitor_data(RESULT_DIR)
     df_hashtags = load_hashtag_data(RESULT_DIR)
@@ -483,9 +471,13 @@ if not df_profile.empty:
     if f_60 is not None:
         gain_prev = f_30 - f_60
 
-# 投稿提案サマリ（全タブ共通、全期間データ）
+# 投稿提案サマリ（型の分析は直近12ヶ月・投稿ペースは全期間で今日基準）
 summary = build_summary(df_media, df_competitors, df_hashtags)
-PRED_COLOR = {"高": C_BLUE, "中": C_ORANGE, "低": C_INK3}
+IDEA_METRIC = summary.get("metric_label", "反応")
+IDEA_WINDOW = (
+    f"直近{summary['window_months']}ヶ月の投稿 {summary['window_posts']}件"
+    if summary.get("window_months") else "全期間の投稿"
+)
 
 # -------- 4タブ --------
 tab_home, tab_trend, tab_detail, tab_idea = st.tabs(
@@ -496,6 +488,20 @@ tab_home, tab_trend, tab_detail, tab_idea = st.tabs(
 # タブ1: ホーム
 # ========================================
 with tab_home:
+    # === 今週やること（月間4週サイクル＋停滞・待受の出し忘れ）。週次LINEレポートと同じロジック ===
+    week_todo = this_week_actions(df_media)
+    with st.container(border=True):
+        notes_html = "".join(
+            f'<div style="color:{C_DOWN};margin-top:4px">⚠️ {n}</div>' for n in week_todo["notes"]
+        )
+        st.markdown(
+            '<div class="atl-eyebrow">📋 今週やること</div>'
+            f'<div style="font-family:var(--serif);font-size:1.15rem;font-weight:600">{week_todo["theme"]}</div>'
+            f'<div style="color:{C_INK2};font-size:.9rem;padding-bottom:6px">{week_todo["hint"]}</div>'
+            f"{notes_html}",
+            unsafe_allow_html=True,
+        )
+
     # === 北極星: 保存率ヒーローカード ===
     with st.container(border=True):
         hero_l, hero_r = st.columns([1, 1.25], vertical_alignment="center")
@@ -1116,7 +1122,7 @@ with tab_idea:
             with st.expander(f"もっと見る（残り {len(advice) - 3} 件）"):
                 for a in advice[3:]:
                     st.markdown(f"- {a}")
-        st.caption("※ 過去データの数値根拠にもとづく提案です（AI不使用・無料）")
+        st.caption(f"※ {IDEA_WINDOW}の数値根拠にもとづく提案です（指標: {IDEA_METRIC}／AI不使用・無料）")
     else:
         st.info("データが貯まるとここに具体的な提案が表示されます")
 
@@ -1182,7 +1188,11 @@ with tab_idea:
                 st.metric("🗓️ 最近の投稿ペース", f"週 {cad.get('recent_per_week', '—')}件")
                 trend_str = cad.get("trend", "")
                 prev_cad = cad.get("older_per_week")
-                st.caption(f"傾向: {trend_str}" + (f"（以前は週{prev_cad}件）" if prev_cad else ""))
+                st.caption(
+                    f"直近{cad.get('recent_days', 30)}日・傾向: {trend_str}"
+                    + (f"（その前は週{prev_cad}件）" if prev_cad is not None else "")
+                    + (f"／最終投稿から{cad['days_since_last']}日" if cad.get("days_since_last") is not None else "")
+                )
             else:
                 st.metric("🗓️ 最近の投稿ペース", "—")
 
@@ -1192,7 +1202,7 @@ with tab_idea:
                 dfc = pd.DataFrame(cl["ranking"])
                 fig_cl = px.bar(
                     dfc, x="band", y="avg",
-                    labels={"band": "キャプション長", "avg": "平均エンゲージ"},
+                    labels={"band": "キャプション長", "avg": f"平均{IDEA_METRIC}"},
                     title="キャプション長 × 反応",
                 )
                 fig_cl.update_traces(marker_color=C_VIOLET)
@@ -1203,7 +1213,7 @@ with tab_idea:
                 dfh = pd.DataFrame(hc["ranking"])
                 fig_hc = px.bar(
                     dfh, x="band", y="avg",
-                    labels={"band": "ハッシュタグ数", "avg": "平均エンゲージ"},
+                    labels={"band": "ハッシュタグ数", "avg": f"平均{IDEA_METRIC}"},
                     title="ハッシュタグ数 × 反応",
                 )
                 fig_hc.update_traces(marker_color=C_BLUE)
@@ -1223,54 +1233,6 @@ with tab_idea:
             for s in low.get("worst_slots", []):
                 st.markdown(
                     f"- {s['day_name']}曜 {s['hour']}時台 は反応が低め"
-                    f"（平均{s['avg']} / {s['count']}件）"
+                    f"（平均{IDEA_METRIC} {s['avg']} / {s['count']}件）"
                 )
             st.caption("※ 件数が少ない時間帯は参考程度に")
-
-    st.divider()
-
-    # --- AI投稿案（最下部・折りたたみ） ---
-    with st.expander("🤖 AIで投稿案を作る（任意・課金あり）", expanded=False):
-        st.caption("過去データと最新トレンドをもとに、Claudeが具体的な投稿案を作ります。")
-        gen_col, info_col = st.columns([1, 3])
-        with gen_col:
-            do_generate = st.button("✨ 投稿案を作ってもらう", type="primary", use_container_width=True)
-        with info_col:
-            regen = st.checkbox("最新で作り直す（再生成）", value=False)
-            st.caption("※ 生成1回ごとにClaude API課金が発生します（同日はキャッシュ利用）")
-
-        if do_generate:
-            from suggest import MissingAPIKeyError, generate_suggestions
-            try:
-                with st.spinner("Claudeが投稿案を考えています…（30秒ほど）"):
-                    st.session_state["suggestions"] = generate_suggestions(force=regen)
-            except MissingAPIKeyError:
-                st.error("ANTHROPIC_API_KEY が設定されていません。`.env` に追加してから再度お試しください。")
-            except ImportError:
-                st.error("anthropic パッケージが未インストールです。`pip install -r requirements.txt` を実行してください。")
-            except Exception as e:  # noqa: BLE001
-                st.error(f"生成中にエラーが発生しました: {e}")
-
-        result = st.session_state.get("suggestions")
-        if result:
-            st.caption(f"生成日時: {result.get('generated_at', '—')}　|　モデル: {result.get('model', '—')}")
-            suggestions = result.get("suggestions", [])
-            for i, sug in enumerate(suggestions, 1):
-                color = PRED_COLOR.get(sug.get("predicted_level", "中"), C_ORANGE)
-                with st.container(border=True):
-                    head_l, head_r = st.columns([4, 1])
-                    with head_l:
-                        st.markdown(f"**案{i}: {sug.get('theme', '')}**")
-                    with head_r:
-                        st.markdown(
-                            f"<span style='color:{color};font-weight:700'>"
-                            f"予測 {sug.get('predicted_level', '—')}</span>",
-                            unsafe_allow_html=True,
-                        )
-                    st.markdown(sug.get("caption_draft", ""))
-                    tags = sug.get("hashtags", []) or []
-                    if tags:
-                        st.caption("　".join(f"#{t.lstrip('#')}" for t in tags))
-                    st.caption(f"📸 {sug.get('media_type', '—')}　⏰ {sug.get('best_time', '—')}")
-                    with st.expander("なぜ伸びそう？"):
-                        st.write(sug.get("rationale", ""))

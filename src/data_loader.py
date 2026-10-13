@@ -333,6 +333,26 @@ def merge_insights(df_media: pd.DataFrame, df_insights: pd.DataFrame) -> pd.Data
     return df
 
 
+def load_merged_media(result_dir: str = RESULT_DIR) -> tuple:
+    """
+    プロフィール推移と、フォロワー数・インサイト・視覚特徴を結合済みのメディアデータを返す。
+    ダッシュボード・週次レポートで共通の読み込み手順。
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        (df_profile, df_media)
+    """
+    df_profile = load_profile_data(result_dir)
+    df_media = load_media_data(result_dir)
+    if not df_media.empty and not df_profile.empty:
+        df_media = merge_follower_at_post_date(df_media, df_profile)
+    if not df_media.empty:
+        df_media = merge_insights(df_media, load_insights_data(result_dir))
+        df_media = merge_visual(df_media, load_visual_data(result_dir))
+    return df_profile, df_media
+
+
 def merge_follower_at_post_date(df_media: pd.DataFrame, df_profile: pd.DataFrame) -> pd.DataFrame:
     if df_profile.empty or df_media.empty:
         df_media["followers_at_post"] = None
