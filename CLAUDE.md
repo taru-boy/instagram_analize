@@ -284,7 +284,8 @@ restart で直らなければ認証切れ（`~/.claude/.credentials.json` を VS
 - エンゲージメント率 = (いいね数 + コメント数) / 投稿日時点のフォロワー数 × 100（基本ER。`engagement_rate`。散布図やbest_slots等の全期間比較に使用）。
   なお**投稿パフォーマンス一覧の📊は保存・シェアを含む総エンゲージ率 `total_engagement_rate`**（Meta の `total_interactions` 基準）を表示・並べ替え対象にする。販売/受注目的では保存が北極星のため、一覧は保存・シェア込みで評価する
 - インサイトとメディアCSVは `id` で結合する。`id` 列はある時点から追加されたため、それ以前のメディアCSVには `id` が無くインサイトを結合できない（`collect.py` を再実行すれば最新CSVに `id` が付与される）
-- `profile_visits`（投稿経由のプロフィール訪問）と `profile_views`（アカウント全体のプロフィールアクセス）は別物
+- `profile_visits`（投稿経由のプロフィール訪問）と `profile_views`（アカウント全体のプロフィールアクセス）は別物。
+  `profile_visits` はリールでは取得できない（v22 で `#100`）。動画の導線効果は投稿日のアカウント日次 `profile_views` で見る
 - アカウントインサイトは `period=day`（当日分のみ）。推移を見るには日次cron（`run.sh`）で毎日蓄積する
 - インサイトAPIにもレート制限（毎時200リクエスト）あり。`collect_insights.py` はデフォルトで直近200件のみ取得する
 - APIバージョンは v22.0。欲しいインサイト指標は v22 ですべて取得可能（バージョンアップは任意）。`impressions` と非Reelsの `video_views` は2025年に廃止済み（それぞれ `reach`・`views` で代替）

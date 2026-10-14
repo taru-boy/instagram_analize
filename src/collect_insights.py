@@ -35,6 +35,8 @@ from collect_utils import api_get, ensure_dir, load_env, today_str
 
 # メディアタイプごとに取得を試みるメトリック。
 # タイプ非対応のメトリックは API が #100 エラーを返すため、core にフォールバックする。
+# リール（VIDEO/REELS）は profile_visits 非対応（#100。v22.0 で 2026-10-14 に確認）。
+# 足すとリクエストごと失敗して total_interactions / views まで落ちるので入れない。
 MEDIA_METRICS = {
     "IMAGE": ["reach", "saved", "shares", "total_interactions", "profile_visits"],
     "CAROUSEL_ALBUM": ["reach", "saved", "shares", "total_interactions", "profile_visits"],

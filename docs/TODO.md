@@ -4,6 +4,7 @@
 
 優先度は、このリポジトリの目的（妻のInstagramから作品販売・受注につなげる）への効き目で決めている。
 運用上の制約は「投稿は週1〜2件まで」「売上データは扱わない」「分析を細かくするより、行動に変える支援を優先する」。
+課題は1セッション1項目で進める。各項目は、このファイルと CLAUDE.md だけを読めば着手できるように書く。
 
 ## 完了済み（2026-10-14）
 
@@ -11,6 +12,7 @@
 - 助言: 直近12ヶ月・調整保存率を基準に変更。投稿ペースは今日を基準にして停滞を検知する。競合由来の助言は削除
 - ホームタブに「今週やること」カードを追加。週次レポート `src/weekly_report.py` を追加（cron 未登録）
 - AI投稿案（`suggest.py`）は使われていなかったため削除
+- 動画のプロフィール訪問: リールは v22 で `profile_visits` 非対応（`#100`）と確認。取得は追加せず、コード・ダッシュボード・CLAUDE.md に制約を記録
 
 ## 最優先（コードではなく運用）
 
@@ -22,22 +24,22 @@
 1. **抽選販売（2026-07-24〜08-13、完売）の振り返り（分析のみ）**
    - 画像の告知（7/24）はリーチ2,803・プロフィール訪問223。動画の告知11本はリーチ300〜600・保存1〜5で弱かった。
    - 次回の抽選告知の型（静止画を主にする、投稿の本数とタイミング）を具体化する。売上に一番近い作業。
+   - リールの投稿別プロフィール訪問は API で取れない（v22 で `#100`、2026-10-14 確認）。動画の効果は告知日のアカウント日次 `profile_views` で比べる。
+   - データ: `load_media_data`＋`merge_insights`（投稿別）、`load_account_insights_data`（日次。2026-06-07 から蓄積済みで抽選期間をカバー）。
+   - 成果物は `docs/` に振り返りメモとして置く（コード変更は不要の想定）。
 2. **競合・ハッシュタグ収集の扱い**（ユーザーの判断待ち）
    - どちらも 2026-06-07 で止まっている。競合4アカウントは選定根拠が弱く、参考程度。
    - 助言からは外したが、ダッシュボードの「業界トレンド」表示と `load_competitor_data` / `load_hashtag_data` は残っている。
    - 選択肢: 同じ規模で原画を販売している画家を選び直す ／ 表示も収集スクリプトも外す。
-3. **動画のプロフィール訪問を取得していない**
-   - `collect_insights.MEDIA_METRICS` の VIDEO/REELS に `profile_visits` が無く、プロフィール訪問の平均から抜けている。
-   - v22 で取れるか1件試して検証し、取れるなら追加する。
 
 ## P3: 整備
 
-4. **Streamlit の非推奨引数**: `dashboard.py` に `use_container_width` が20箇所残っている（削除予定日 2025-12-31 を過ぎている。1.58 では警告のみ）。
+3. **Streamlit の非推奨引数**: `dashboard.py` に `use_container_width` が20箇所残っている（削除予定日 2025-12-31 を過ぎている。1.58 では警告のみ）。
    `width="stretch"` に置き換える。`requirements.txt` もバージョン未固定。
-5. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
+4. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
    `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（`journaling/docs/automation.md` の時刻表も直す）。
-6. **README が古い**: `collect.py` しか載っていない。CLAUDE.md と `requirements.txt` へ誘導する形にする。
-7. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
+5. **README が古い**: `collect.py` しか載っていない。CLAUDE.md と `requirements.txt` へ誘導する形にする。
+6. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
 
 ## 保留・待ち
 

@@ -868,6 +868,8 @@ with tab_detail:
                     fig_t.update_traces(texttemplate=f"%{{text{fmt}}}", textposition="outside")
                     fig_t.update_layout(showlegend=False, margin=dict(t=40))
                     st.plotly_chart(fig_t, use_container_width=True)
+            if "平均プロフィール訪問" in type_ins.columns:
+                st.caption("動画（リール）は API の制約でプロフィール訪問を取得できないため、表示されません。")
 
             st.dataframe(
                 type_ins.drop(columns=["media_type"]).set_index("タイプ"),
