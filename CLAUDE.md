@@ -8,6 +8,8 @@ Instagram投稿データ収集・分析ツール。Facebook Graph API の Busine
 
 **重要：`ACCESS_TOKEN`／`IG_USER_ID` は妻のアカウント本体のトークン。** Business Discovery ではいいね・コメントしか取れないが、本体トークンならインサイト系エンドポイント（`/{media-id}/insights`、`/{ig-user-id}/insights`）を直接叩けるため、リーチ・保存・シェア・プロフィールアクセス・リンククリックも取得できる（`collect_insights.py`）。
 
+**残課題は [docs/TODO.md](docs/TODO.md) にまとめている。** 「続き」「残課題」と言われたらここから始め、終わった項目は消して新しい課題は優先度の位置に足す。
+
 ## ディレクトリ構成
 
 ```
@@ -25,6 +27,9 @@ Instagram投稿データ収集・分析ツール。Facebook Graph API の Busine
 ├── result/              # 収集済みCSVデータ（.gitignore対象）
 ├── run.sh               # cron用データ収集スクリプト（失敗時はLINE通知）
 ├── run_dashboard.sh     # ダッシュボード起動スクリプト
+├── docs/
+│   ├── TODO.md          # 残課題リスト（優先度付き）
+│   └── base_shop/       # BASEショップ再構成の設計ドキュメント
 ├── requirements.txt     # 依存パッケージ一覧
 ├── .env                 # APIトークン（.gitignore対象）
 └── CLAUDE.md
