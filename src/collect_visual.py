@@ -253,15 +253,12 @@ def main():
 
     today = dt.now().strftime("%Y-%m-%d")
     out_path = os.path.join(out_dir, f"{_target_label(result_dir)}_visual_{today}.csv")
-    # 同日に複数回実行した場合は既存ぶんと結合して id 重複を除く
+    # 同日に複数回実行した場合は既存ぶんと結合して id 重複を除く。
+    # 読めないときは例外のまま止める（握りつぶして上書きすると既存ぶんが消える）
     if os.path.exists(out_path):
-        try:
-            prev = pd.read_csv(out_path)
-            prev["id"] = prev["id"].astype(str)
-            df_out = pd.concat([prev, df_out], ignore_index=True)
-            df_out = df_out.drop_duplicates("id", keep="last")
-        except Exception:
-            pass
+        prev = pd.read_csv(out_path, dtype={"id": str})
+        df_out = pd.concat([prev, df_out], ignore_index=True)
+        df_out = df_out.drop_duplicates("id", keep="last")
     df_out.to_csv(out_path, index=False)
     print(f"視覚特徴を保存: {out_path}（成功 {ok_count} / 取得失敗 {len(todo) - ok_count}）")
     print("視覚特徴の収集が完了しました。")

@@ -7,7 +7,7 @@ def test_make_df():
             "id": "1",
             "media_type": "IMAGE",
             "media_url": "https://example.com/1.jpg",
-            "caption": "新作です #水彩 #原画 #art",
+            "caption": "新作です #水彩 #原画\ufeff#art",
             "timestamp": "2026-10-01T09:30:00+0000",
             "like_count": 10,
             "comments_count": 2,

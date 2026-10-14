@@ -269,7 +269,7 @@ def make_df(media_data: list, data_dict: dict) -> pd.DataFrame:
             media_url = media.get("thumbnail_url", media.get("media_url", None))
         else:
             media_url = media.get("media_url", None)
-        hash_tag_list = re.findall("#([^\s→#\ufeff]*)", caption)
+        hash_tag_list = re.findall(r"#([^\s→#\ufeff]*)", caption)
         hash_tags = "\n".join(hash_tag_list)
         timestamp = media["timestamp"].replace("+0000", "").replace("T", " ")
         like_count = media.get("like_count", None)

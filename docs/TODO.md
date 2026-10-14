@@ -21,9 +21,6 @@
 2. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
    `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（今の cron は journaling 用の1行のみ。`journaling/docs/automation.md` の時刻表も直す）。
 3. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
-4. **小さな地雷2つ**（どちらも今は動いている）:
-   - `collect.make_df` のハッシュタグ正規表現 `"#([^\s→#\ufeff]*)"` が raw 文字列でなく、`\s` が不正なエスケープ（今の Python 3.11 では黙って通るが、3.12 で警告・将来はエラー）。`r"..."` にする。`tests/test_collect.py` が守ってくれる。
-   - `collect_visual.py` の同日ファイル結合が `except Exception: pass` で、読めないと黙って上書きする（インサイトCSVで起きたのと同じ事故の形）。`save_media_insights` に合わせて例外のまま止める。
 
 ## 保留・待ち
 
@@ -47,3 +44,4 @@
 - アカウント日次: 2日ぶんが混ざって日付もずれていたのを、1日ずつ取る方式に直した。過去2年ぶん（2024-10-15〜）を取り直し、抽選振り返りの数字も更新
 - 投稿別インサイトCSV: 同じ日に再実行すると上書きされていたのを、`id` で結合して保存するように直した
 - テストを追加（`tests/`・`pytest -q`）: `posting_cadence`・`add_saved_rate_adj`・`make_df`・`upsert_account_daily`・`save_media_insights`・`_day_range_param`
+- ハッシュタグの正規表現を raw 文字列に。`collect_visual.py` の同日結合が読めないときに黙って上書きしていたのを、例外で止めるように
