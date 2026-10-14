@@ -21,6 +21,9 @@
 2. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
    `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（今の cron は journaling 用の1行のみ。`journaling/docs/automation.md` の時刻表も直す）。
 3. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
+4. **小さな地雷2つ**（どちらも今は動いている）:
+   - `collect.make_df` のハッシュタグ正規表現 `"#([^\s→#﻿]*)"` が raw 文字列でなく、`\s` が不正なエスケープ（今の Python 3.11 では黙って通るが、3.12 で警告・将来はエラー）。`r"..."` にする。`tests/test_collect.py` が守ってくれる。
+   - `collect_visual.py` の同日ファイル結合が `except Exception: pass` で、読めないと黙って上書きする（インサイトCSVで起きたのと同じ事故の形）。`save_media_insights` に合わせて例外のまま止める。
 
 ## 保留・待ち
 
