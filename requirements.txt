@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 streamlit==1.58.0
 plotly==6.8.0
 Pillow==11.3.0
+pytest==9.1.1

@@ -18,11 +18,9 @@
 1. **トレンドタブのアカウント日次グラフが2年ぶんになった**: 取り直しで728日ぶんになり、日ごとの点付き折れ線（`markers=True`）がスマホで潰れる。
    `dashboard.py` の「🔗 アカウント日次インサイトの推移」を、既定は直近90日にするか週ごとの合計に変える（`PERIOD_OPTIONS`／`_period_window` が流用できる）。
    キャプション「日次cronで毎日 `run.sh` を実行すると蓄積されていきます」も、過去2年は取り直し済みである旨に直す。
-2. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に加え、`collect_insights.upsert_account_daily`（日付ごとに上書きされ行が増えないこと）
-   と `_day_range_param`（UTC 0時〜翌0時）に最小限の pytest を置く。助言ロジックや収集の手直しで数字が黙って変わるのを防ぐ。
-3. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
+2. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
    `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（今の cron は journaling 用の1行のみ。`journaling/docs/automation.md` の時刻表も直す）。
-4. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
+3. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
 
 ## 保留・待ち
 
@@ -45,3 +43,4 @@
 - Streamlit の非推奨引数 `use_container_width` を `width="stretch"` に置き換え、`requirements.txt` を動作中の版に固定（未記載だった `numpy` も追加）
 - アカウント日次: 2日ぶんが混ざって日付もずれていたのを、1日ずつ取る方式に直した。過去2年ぶん（2024-10-15〜）を取り直し、抽選振り返りの数字も更新
 - 投稿別インサイトCSV: 同じ日に再実行すると上書きされていたのを、`id` で結合して保存するように直した
+- テストを追加（`tests/`・`pytest -q`）: `posting_cadence`・`add_saved_rate_adj`・`make_df`・`upsert_account_daily`・`save_media_insights`・`_day_range_param`

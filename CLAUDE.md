@@ -22,6 +22,7 @@ Instagram投稿データ収集・分析ツール。Facebook Graph API の Busine
 │   ├── insights.py            # 統計ベースの「伸びる条件」抽出（純関数）
 │   ├── weekly_report.py       # 週次アクションレポート（LINEにプッシュ。AI不使用）
 │   └── dashboard.py           # Streamlit ダッシュボード
+├── tests/               # pytest（純関数・CSV保存の最小限のテスト。ネットワークと result/ には触らない）
 ├── result/              # 収集済みCSVデータ（.gitignore対象）
 ├── run.sh               # cron用データ収集スクリプト（失敗時はLINE通知）
 ├── run_dashboard.sh     # ダッシュボード起動スクリプト
@@ -58,6 +59,7 @@ python src/collect_insights.py     # インサイト収集（直近200件。--al
 python src/collect_insights.py --account-only --account-backfill 730  # アカウント日次を過去2年ぶん取り直す（API の上限が2年）
 python src/collect_visual.py       # 投稿画像の視覚特徴収集（直近200件のうち未処理。--all で全件、--limit Nで件数指定、--force で再計算）
 python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--dry-run なしで LINE 送信）
+pytest -q                          # テスト（pytest.ini で src/ を import パスに入れている）
 ```
 
 実行すると `result/` 配下にCSVが保存される：
