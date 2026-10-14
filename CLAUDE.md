@@ -27,6 +27,7 @@ Instagram投稿データ収集・分析ツール。Facebook Graph API の Busine
 ├── run_dashboard.sh     # ダッシュボード起動スクリプト
 ├── docs/
 │   ├── TODO.md          # 残課題リスト（優先度付き）
+│   ├── lottery_review_2026-07.md  # 抽選販売の振り返りと次回の告知の型
 │   └── base_shop/       # BASEショップ再構成の設計ドキュメント
 ├── requirements.txt     # 依存パッケージ一覧
 ├── .env                 # APIトークン（.gitignore対象）
