@@ -244,7 +244,7 @@ CSSは `data-testid` セレクタ依存のため、Streamlitバージョンア�
 |---|---|
 | ラッパ | `~/Desktop/journaling/scripts/remote_control.sh`（**journaling リポジトリ側に置いた共有スクリプト**。このリポジトリには実体を持たない） |
 | 常駐 | `~/.config/systemd/user/claude-rc-insta.service`（リポジトリ外。`RC_REPO`／`RC_NAME` を渡すだけ） |
-| 見張り | **なし**（journaling 側にはある。こちらは落ちても通知が来ない） |
+| 見張り | cron で30分おき（:10・:40）に `~/Desktop/journaling/scripts/rc_healthcheck.sh` を `RC_UNIT=claude-rc-insta.service` で実行。落ちていたら自動復旧して LINE。ログは `~/rc_health_insta.log` |
 
 `--spawn same-dir` なので、リモコン経由のセッションもこの作業ツリー（main）に直接書く。worktree では分離されない。
 権限モードは既定（毎回確認）。`.env` に Instagram のアクセストークンがあるため `bypassPermissions` は設定しない。
