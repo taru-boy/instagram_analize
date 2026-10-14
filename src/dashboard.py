@@ -513,7 +513,7 @@ with tab_home:
             fig_spark = _monthly_saved_spark(df_media) if HAS_INSIGHTS else None
             if fig_spark is not None:
                 st.markdown('<div class="atl-eyebrow">月別の平均保存数（12ヶ月）</div>', unsafe_allow_html=True)
-                st.plotly_chart(fig_spark, use_container_width=True, config=SPARK_CONFIG)
+                st.plotly_chart(fig_spark, width="stretch", config=SPARK_CONFIG)
         if HAS_INSIGHTS:
             st.caption(
                 f"保存数の合計 ÷ リーチの合計（リーチ加重）。直近30日の投稿 {n_recent} 件"
@@ -583,7 +583,7 @@ with tab_home:
                 f'<span class="gain" style="color:{gain_color}">{gain_total:+,}</span></span></div>',
                 unsafe_allow_html=True,
             )
-            st.plotly_chart(_followers_spark(df_profile), use_container_width=True, config=SPARK_CONFIG)
+            st.plotly_chart(_followers_spark(df_profile), width="stretch", config=SPARK_CONFIG)
 
     st.divider()
 
@@ -650,7 +650,7 @@ with tab_home:
                 with col_img:
                     url = str(row.get("media_url", ""))
                     if url.startswith("http"):
-                        st.image(url, use_container_width=True)
+                        st.image(url, width="stretch")
                     else:
                         st.markdown('<div class="atl-noimg">🖼️</div>', unsafe_allow_html=True)
                 with col_body:
@@ -709,7 +709,7 @@ with tab_trend:
         )
         fig_fw.update_traces(line_color=C_BLUE, marker_color=C_BLUE, marker_size=5)
         fig_fw.update_layout(hovermode="x unified")
-        st.plotly_chart(fig_fw, use_container_width=True)
+        st.plotly_chart(fig_fw, width="stretch")
     else:
         st.info("プロフィールデータがまだありません（`python src/collect.py` を実行してください）")
 
@@ -732,7 +732,7 @@ with tab_trend:
         )
         fig_cum.update_traces(line_color=C_VIOLET, line_width=2)
         fig_cum.update_layout(hovermode="x unified")
-        st.plotly_chart(fig_cum, use_container_width=True)
+        st.plotly_chart(fig_cum, width="stretch")
         st.caption(f"現在の累積投稿数: {len(df_media):,} 件")
     else:
         st.info("投稿データがまだありません")
@@ -762,7 +762,7 @@ with tab_trend:
                 )
                 fig_mr.update_traces(line_color=C_BLUE, marker_color=C_BLUE, marker_size=6)
                 fig_mr.update_layout(hovermode="x unified")
-                st.plotly_chart(fig_mr, use_container_width=True)
+                st.plotly_chart(fig_mr, width="stretch")
             with col_m2:
                 fig_ms = px.line(
                     monthly, x="month", y="平均保存数",
@@ -771,7 +771,7 @@ with tab_trend:
                 )
                 fig_ms.update_traces(line_color=C_ORANGE, marker_color=C_ORANGE, marker_size=6)
                 fig_ms.update_layout(hovermode="x unified")
-                st.plotly_chart(fig_ms, use_container_width=True)
+                st.plotly_chart(fig_ms, width="stretch")
         else:
             st.info("インサイト付きの投稿データがありません")
     else:
@@ -801,7 +801,7 @@ with tab_trend:
                 markers=True,
             )
             fig_ai.update_layout(hovermode="x unified")
-            st.plotly_chart(fig_ai, use_container_width=True)
+            st.plotly_chart(fig_ai, width="stretch")
             st.caption("日次cronで毎日 `run.sh` を実行すると蓄積されていきます。")
         else:
             st.info("日次インサイト列が見つかりません")
@@ -864,13 +864,13 @@ with tab_detail:
                     fmt = ":.0f" if "リーチ" in metric else ":.1f"
                     fig_t.update_traces(texttemplate=f"%{{text{fmt}}}", textposition="outside")
                     fig_t.update_layout(showlegend=False, margin=dict(t=40))
-                    st.plotly_chart(fig_t, use_container_width=True)
+                    st.plotly_chart(fig_t, width="stretch")
             if "平均プロフィール訪問" in type_ins.columns:
                 st.caption("動画（リール）は API の制約でプロフィール訪問を取得できないため、表示されません。")
 
             st.dataframe(
                 type_ins.drop(columns=["media_type"]).set_index("タイプ"),
-                use_container_width=True,
+                width="stretch",
             )
         elif not df_media.empty:
             # インサイト未取得時：いいね基準フォールバック
@@ -887,7 +887,7 @@ with tab_detail:
             )
             fig_fb.update_traces(texttemplate="%{text:.1f}", textposition="outside")
             fig_fb.update_layout(showlegend=False)
-            st.plotly_chart(fig_fb, use_container_width=True)
+            st.plotly_chart(fig_fb, width="stretch")
         else:
             st.info("データがありません")
 
@@ -917,7 +917,7 @@ with tab_detail:
                 color_continuous_scale=SEQ_BLUE,
                 aspect="auto",
             )
-            st.plotly_chart(fig_heat, use_container_width=True)
+            st.plotly_chart(fig_heat, width="stretch")
             st.caption("※ 投稿数が少ない時間帯は参考程度にご覧ください")
         else:
             st.info("データがありません")
@@ -935,7 +935,7 @@ with tab_detail:
                 labels={"timestamp_jst": "投稿日時", "reach": "リーチ数", "type_ja": "タイプ"},
                 color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
             )
-            st.plotly_chart(fig_r, use_container_width=True)
+            st.plotly_chart(fig_r, width="stretch")
 
             has_nf = "non_follower_reach_rate" in df_ri.columns and df_ri["non_follower_reach_rate"].notna().any()
             if has_nf:
@@ -952,7 +952,7 @@ with tab_detail:
                     },
                     color_discrete_map={v: MEDIA_TYPE_COLOR[k] for k, v in MEDIA_TYPE_JA.items()},
                 )
-                st.plotly_chart(fig_nf, use_container_width=True)
+                st.plotly_chart(fig_nf, width="stretch")
                 avg_nf = df_nf["non_follower_reach_rate"].mean()
                 st.caption(f"平均フォロワー外リーチ比率: {avg_nf:.1f}%")
         else:
@@ -1012,7 +1012,7 @@ with tab_detail:
                         color_continuous_scale=SEQ_BLUE,
                     )
                     fig_h1.update_layout(coloraxis_showscale=False, height=520)
-                    st.plotly_chart(fig_h1, use_container_width=True)
+                    st.plotly_chart(fig_h1, width="stretch")
 
                 with tab_h2:
                     freq = df_tags["hashtag"].value_counts().reset_index().head(20)
@@ -1026,7 +1026,7 @@ with tab_detail:
                         color_continuous_scale=SEQ_BLUE,
                     )
                     fig_h2.update_layout(coloraxis_showscale=False, height=520)
-                    st.plotly_chart(fig_h2, use_container_width=True)
+                    st.plotly_chart(fig_h2, width="stretch")
             else:
                 st.info("ハッシュタグデータがありません")
         else:
@@ -1076,7 +1076,7 @@ with tab_detail:
                         )
                         fig_v.update_traces(texttemplate="%{text:.2f}", textposition="outside")
                         fig_v.update_layout(showlegend=False, margin=dict(t=40), height=260)
-                        st.plotly_chart(fig_v, use_container_width=True)
+                        st.plotly_chart(fig_v, width="stretch")
 
             dc = va.get("dominant_color") or {}
             if dc.get("ranking"):
@@ -1089,7 +1089,7 @@ with tab_detail:
                 )
                 fig_c.update_traces(texttemplate="%{text:.2f}", textposition="outside")
                 fig_c.update_layout(coloraxis_showscale=False, height=320)
-                st.plotly_chart(fig_c, use_container_width=True)
+                st.plotly_chart(fig_c, width="stretch")
             st.caption(
                 "※ 件数が少ない帯は参考程度に。IGの表示画像（中央クロップされることあり）を基準にしています。"
             )
@@ -1197,7 +1197,7 @@ with tab_idea:
                 )
                 fig_cl.update_traces(marker_color=C_VIOLET)
                 fig_cl.update_layout(showlegend=False, margin=dict(t=40), height=300)
-                st.plotly_chart(fig_cl, use_container_width=True)
+                st.plotly_chart(fig_cl, width="stretch")
         with detail_r:
             if hc.get("ranking"):
                 dfh = pd.DataFrame(hc["ranking"])
@@ -1208,7 +1208,7 @@ with tab_idea:
                 )
                 fig_hc.update_traces(marker_color=C_BLUE)
                 fig_hc.update_layout(showlegend=False, margin=dict(t=40), height=300)
-                st.plotly_chart(fig_hc, use_container_width=True)
+                st.plotly_chart(fig_hc, width="stretch")
 
     # --- 避けたい条件 ---
     low = summary.get("low_performers") or {}
