@@ -11,22 +11,26 @@
 - **投稿の再開。** 8月中旬から投稿がほぼ止まっている（月別 7月14→8月4→9月2→10月1件、最終投稿 10/1）。
   ツールでできるのはホームの「今週やること」カードで促すところまで。
 
-## P3: 整備（どれも短時間）
+## P2: 整備（どれも短時間）
 
-上から順に、放置したときの困り具合が大きい。
+販売・受注に直結する課題は今は無い。上から順に、放置したときの困り具合が大きい。
 
 1. **Streamlit の非推奨引数**: `dashboard.py` に `use_container_width` が20箇所残っている（削除予定日 2025-12-31 を過ぎている。1.58 では警告のみ）。
    `width="stretch"` に置き換える。あわせて `requirements.txt` のバージョンを固定する（今は `requests`・`pandas` 等が未固定）。
    アップデートで突然ダッシュボードが壊れるのを防ぐ。
-2. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
-   助言ロジックの手直しで数字が黙って変わるのを防ぐ。
-3. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
-   `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（今の cron は journaling 用の1行のみ。`journaling/docs/automation.md` の時刻表も直す）。
-4. **アカウント日次の日付が1日ずれている**: `collect_insights.py` は0時に実行して `date` に収集日を入れるが、中身はほぼ前日ぶん。
+2. **アカウント日次の日付が1日ずれている**: `collect_insights.py` は0時に実行して `date` に収集日を入れるが、中身はほぼ前日ぶん。
    ダッシュボードのトレンドタブや週次レポートで、投稿日と効果の日がずれて見える。保存時か表示時に1日戻すか検討する（既存CSVとの整合に注意）。
+   次回の抽選で今回とクリック推移を比べる前に直しておきたい。
+3. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
+   助言ロジックの手直しで数字が黙って変わるのを防ぐ。
+4. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
+   `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（今の cron は journaling 用の1行のみ。`journaling/docs/automation.md` の時刻表も直す）。
 5. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
 
 ## 保留・待ち
+
+- **次回の抽選販売の検証**: [lottery_review_2026-07.md](lottery_review_2026-07.md) の「次回の告知の型」（開始の静止画＋作品動画をまとめて固定）で出したら、
+  今回のリンククリック推移（告知翌日131→53→22…）と比べて、メモに結果を足す。妻には共有済みで好評（2026-10-14）。
 
 - **週次LINEレポート**: 妻向けの機能なので、妻から要望があるまで cron に登録しない（送信できることは 2026-10-14 に確認済み）。
 - **収集失敗の通知**: 本番経路（0時にキューへ積み、朝6:30にまとめて配信）は、実際に失敗したときに確かめる。
@@ -40,5 +44,5 @@
 - ホームタブに「今週やること」カードを追加。週次レポート `src/weekly_report.py` を追加（cron 未登録）
 - AI投稿案（`suggest.py`）は使われていなかったため削除
 - 動画のプロフィール訪問: リールは v22 で `profile_visits` 非対応（`#100`）と確認。コード・ダッシュボード・CLAUDE.md に制約を記録
-- 抽選販売（2026-07）の振り返り: [lottery_review_2026-07.md](lottery_review_2026-07.md)。告知は静止画1本が主役。動画は絵の感じを伝える役として開始直後にまとめて出す
+- 抽選販売（2026-07）の振り返り: [lottery_review_2026-07.md](lottery_review_2026-07.md)。告知は静止画1本が主役。動画は絵の感じを伝える役として開始直後にまとめて出す。妻向けの要約を共有済み
 - 競合・ハッシュタグ収集を削除（選定根拠が弱く参考程度のため）。`result/competitors/`・`result/hashtags/` の過去データはローカルに残っている
