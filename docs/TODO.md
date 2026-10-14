@@ -15,17 +15,21 @@
 
 販売・受注に直結する課題は今は無い。上から順に、放置したときの困り具合が大きい。
 
-1. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
-   助言ロジックの手直しで数字が黙って変わるのを防ぐ。
-2. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
+1. **トレンドタブのアカウント日次グラフが2年ぶんになった**: 取り直しで728日ぶんになり、日ごとの点付き折れ線（`markers=True`）がスマホで潰れる。
+   `dashboard.py` の「🔗 アカウント日次インサイトの推移」を、既定は直近90日にするか週ごとの合計に変える（`PERIOD_OPTIONS`／`_period_window` が流用できる）。
+   キャプション「日次cronで毎日 `run.sh` を実行すると蓄積されていきます」も、過去2年は取り直し済みである旨に直す。
+2. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に加え、`collect_insights.upsert_account_daily`（日付ごとに上書きされ行が増えないこと）
+   と `_day_range_param`（UTC 0時〜翌0時）に最小限の pytest を置く。助言ロジックや収集の手直しで数字が黙って変わるのを防ぐ。
+3. **同じ日に `collect_insights.py --limit N` を流すと、その日の投稿別インサイトCSVが上書きされる**: 0時の cron で200件取った後に手で `--limit 1` を流すと1件ぶんになる
+   （2026-10-14 に実際に起きて取り直した）。`collect_visual.py` と同じく、既存の同日ファイルと `id` で結合してから保存する。
+4. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
    `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（今の cron は journaling 用の1行のみ。`journaling/docs/automation.md` の時刻表も直す）。
-3. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
+5. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
 
 ## 保留・待ち
 
 - **次回の抽選販売の検証**: [lottery_review_2026-07.md](lottery_review_2026-07.md) の「次回の告知の型」（開始の静止画＋作品動画をまとめて固定）で出したら、
   今回のリンククリック推移（告知当日108→44→12…）と比べて、メモに結果を足す。妻には共有済みで好評（2026-10-14）。
-
 - **週次LINEレポート**: 妻向けの機能なので、妻から要望があるまで cron に登録しない（送信できることは 2026-10-14 に確認済み）。
 - **収集失敗の通知**: 本番経路（0時にキューへ積み、朝6:30にまとめて配信）は、実際に失敗したときに確かめる。
 - **BASEショップ**（妻の確認待ち。詳細は [base_shop/](base_shop/)）: GALLERYの既存8枚の作品特定、WORKSのシリーズ紹介文、
