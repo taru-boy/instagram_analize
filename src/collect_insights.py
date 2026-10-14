@@ -173,8 +173,8 @@ def collect_media_insights(version, ig_user_id, access_token, out_dir, today, li
             df_media[col] = None
     df_media = df_media[MEDIA_INSIGHT_COLUMNS]
     media_path = os.path.join(out_dir, f"{ig_user_id}_media_insights_{today}.csv")
-    df_media.to_csv(media_path, index=False)
-    print(f"メディア別インサイトを保存: {media_path}")
+    total = save_media_insights(media_path, df_media)
+    print(f"メディア別インサイトを保存: {media_path}（今回 {len(df_media)} 件・ファイル計 {total} 件）")
 
 
 def fetch_media_list(
@@ -367,6 +367,30 @@ def upsert_account_daily(path: str, rows: list[dict]) -> None:
         if col not in new.columns:
             new[col] = None
     new[ACCOUNT_COLUMNS].sort_values("date").to_csv(path, index=False)
+
+
+def save_media_insights(path: str, df_media: pd.DataFrame) -> int:
+    """投稿別インサイトを日付付きCSVに保存し、ファイルの件数を返す。
+
+    同じ日のファイルが既にあれば id で結合する（丸ごと上書きすると、0時の200件の後に
+    手で --limit 1 を流したときに1件だけになる。2026-10-14 に実際に起きた）。
+    列ごとに最後の非欠損値を採るので新しい値が優先され、一時的なエラーで今回の値が
+    欠けても取得済みの値は消えない（load_insights_data の groupby.last と同じ方針）。
+    """
+    df = df_media.copy()
+    df["id"] = df["id"].astype(str)
+    if os.path.exists(path):
+        prev = pd.read_csv(path, dtype={"id": str})
+        # reach_follower などの常に空の列は concat の型推定から外す（下で列を揃え直す）
+        df = pd.concat(
+            [prev.dropna(axis=1, how="all"), df.dropna(axis=1, how="all")], ignore_index=True
+        )
+        df = df.groupby("id", sort=False, as_index=False).last()
+    for col in MEDIA_INSIGHT_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    df[MEDIA_INSIGHT_COLUMNS].to_csv(path, index=False)
+    return len(df)
 
 
 if __name__ == "__main__":

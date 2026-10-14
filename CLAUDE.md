@@ -100,6 +100,7 @@ python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--d
   同じ日の reach の follower_type 分解もマージする。**フォロワー外リーチが実際に貯まるのはここだけ**。
   API が出すのは直近2年まで（それより前は `#100`）なので、累積ファイルに貯め続けるために日次cron（`run.sh`）を継続する。
   `upsert_account_daily()` で累積CSVに上書き。`--account-backfill N` で取り直す日数、`--account-only` でメディア別を省略。
+- 投稿別CSVは `save_media_insights()` で保存。同じ日のファイルがあれば `id` で結合し、列ごとに最後の非欠損値を採る（同日に `--limit N` を手で流しても、0時に取った200件が消えない）。
 - レート制限対策：デフォルトは直近200件のみ。`--all` で全件、`--limit N` で件数指定、`--sleep` でウェイト調整。
   breakdown のリクエストはアカウント側の1回のみ（メディア1件あたりは常に1リクエスト）。
 
