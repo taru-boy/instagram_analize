@@ -32,14 +32,6 @@ step "インサイト収集" insights.log $BASE_DIR/.venv/bin/python $BASE_DIR/s
 #     CDN URL は期限切れで消えるため、取れるうちに蓄積しておく。
 step "視覚特徴収集" visual.log $BASE_DIR/.venv/bin/python $BASE_DIR/src/collect_visual.py
 
-# 競合アカウントの収集（毎回でも可。Business Discovery のレート制限に注意）
-# step "競合収集" competitors.log $BASE_DIR/.venv/bin/python $BASE_DIR/src/collect_competitors.py
-
-# ハッシュタグ人気投稿の収集
-#   ※ IG Hashtag Search は「7日間で30ユニークタグまで」制限があるため、
-#     このスクリプトは週1〜2回程度の頻度で実行すること（毎日は避ける）。
-# step "ハッシュタグ収集" hashtags.log $BASE_DIR/.venv/bin/python $BASE_DIR/src/collect_hashtags.py
-
 # 失敗があれば LINE で知らせる（トークン失効・API制限などで黙って止まるのを防ぐ）
 if [ ${#FAILED[@]} -gt 0 ]; then
   {

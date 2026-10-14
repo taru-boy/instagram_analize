@@ -13,6 +13,7 @@
 - ホームタブに「今週やること」カードを追加。週次レポート `src/weekly_report.py` を追加（cron 未登録）
 - AI投稿案（`suggest.py`）は使われていなかったため削除
 - 動画のプロフィール訪問: リールは v22 で `profile_visits` 非対応（`#100`）と確認。取得は追加せず、コード・ダッシュボード・CLAUDE.md に制約を記録
+- 競合・ハッシュタグ収集を削除（選定根拠が弱く参考程度のため）。収集スクリプト・ローダー・集計・「業界トレンド」表示を外した。`result/competitors/`・`result/hashtags/` の過去データはローカルに残っている
 
 ## 最優先（コードではなく運用）
 
@@ -27,19 +28,15 @@
    - リールの投稿別プロフィール訪問は API で取れない（v22 で `#100`、2026-10-14 確認）。動画の効果は告知日のアカウント日次 `profile_views` で比べる。
    - データ: `load_media_data`＋`merge_insights`（投稿別）、`load_account_insights_data`（日次。2026-06-07 から蓄積済みで抽選期間をカバー）。
    - 成果物は `docs/` に振り返りメモとして置く（コード変更は不要の想定）。
-2. **競合・ハッシュタグ収集の扱い**（ユーザーの判断待ち）
-   - どちらも 2026-06-07 で止まっている。競合4アカウントは選定根拠が弱く、参考程度。
-   - 助言からは外したが、ダッシュボードの「業界トレンド」表示と `load_competitor_data` / `load_hashtag_data` は残っている。
-   - 選択肢: 同じ規模で原画を販売している画家を選び直す ／ 表示も収集スクリプトも外す。
 
 ## P3: 整備
 
-3. **Streamlit の非推奨引数**: `dashboard.py` に `use_container_width` が20箇所残っている（削除予定日 2025-12-31 を過ぎている。1.58 では警告のみ）。
+2. **Streamlit の非推奨引数**: `dashboard.py` に `use_container_width` が20箇所残っている（削除予定日 2025-12-31 を過ぎている。1.58 では警告のみ）。
    `width="stretch"` に置き換える。`requirements.txt` もバージョン未固定。
-4. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
+3. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
    `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（`journaling/docs/automation.md` の時刻表も直す）。
-5. **README が古い**: `collect.py` しか載っていない。CLAUDE.md と `requirements.txt` へ誘導する形にする。
-6. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
+4. **README が古い**: `collect.py` しか載っていない。CLAUDE.md と `requirements.txt` へ誘導する形にする。
+5. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
 
 ## 保留・待ち
 

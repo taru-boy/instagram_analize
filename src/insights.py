@@ -198,36 +198,6 @@ def top_hashtags_by_engagement(df_media: pd.DataFrame, top_n: int = 10, min_coun
     return grp.round(1).to_dict("records")
 
 
-def trending_topics(
-    df_competitors: pd.DataFrame, df_hashtags: pd.DataFrame, top_n: int = 15
-) -> list:
-    """
-    競合・ハッシュタグ人気投稿で「よく使われている／よく伸びているタグ」を集計。
-    出現頻度と平均いいね数の両方を見られるようにして返す。
-
-    Returns
-    -------
-    list[dict]
-        [{hashtag, count, avg_like}]（出現頻度の降順）
-    """
-    frames = []
-    for df in (df_competitors, df_hashtags):
-        if df is not None and not df.empty:
-            frames.append(_explode_hashtags(df))
-    if not frames:
-        return []
-    tags = pd.concat(frames, ignore_index=True)
-    if tags.empty:
-        return []
-    grp = (
-        tags.groupby("hashtag")
-        .agg(count=("like_count", "count"), avg_like=("like_count", "mean"))
-        .reset_index()
-    )
-    grp = grp.sort_values(["count", "avg_like"], ascending=False).head(top_n)
-    return grp.round(1).to_dict("records")
-
-
 def _caption_len(value) -> int:
     """キャプションの文字数（NaN/空は0）。"""
     if pd.isna(value):
@@ -399,44 +369,6 @@ def low_performers(df_media: pd.DataFrame, bottom_n: int = 3, min_count: int = 3
     return {"worst_slots": worst_slots, "worst_type": worst_type}
 
 
-def competitor_gap(
-    df_media: pd.DataFrame, df_competitors: pd.DataFrame, top_n: int = 10
-) -> dict:
-    """
-    競合がよく使うのに妻が未使用/低頻度のハッシュタグ候補と、
-    競合 vs 妻の平均いいね比較を返す。競合データが無ければ空。
-    """
-    if df_competitors is None or df_competitors.empty:
-        return {}
-
-    my_tags = set()
-    if not df_media.empty:
-        my_tags = set(_explode_hashtags(df_media)["hashtag"].tolist())
-
-    comp_tags = _explode_hashtags(df_competitors)
-    if comp_tags.empty:
-        gap_tags = []
-    else:
-        freq = comp_tags["hashtag"].value_counts().reset_index()
-        freq.columns = ["hashtag", "count"]
-        freq = freq[~freq["hashtag"].isin(my_tags)]
-        gap_tags = freq.head(top_n).to_dict("records")
-
-    my_avg = (
-        round(float(df_media["like_count"].mean()), 1)
-        if not df_media.empty
-        else None
-    )
-    comp_avg = round(float(df_competitors["like_count"].mean()), 1)
-
-    return {
-        "unused_popular_tags": gap_tags,
-        "my_avg_like": my_avg,
-        "competitor_avg_like": comp_avg,
-        "competitor_count": int(df_competitors.get("competitor", pd.Series(dtype=str)).nunique()),
-    }
-
-
 def visual_engagement_analysis(df_media: pd.DataFrame) -> dict:
     """
     投稿画像の視覚特徴（collect_visual.py 由来）とエンゲージメントの関係を集計する。
@@ -509,21 +441,14 @@ def visual_engagement_analysis(df_media: pd.DataFrame) -> dict:
 
 def actionable_advice(
     df_media: pd.DataFrame,
-    df_competitors: pd.DataFrame = None,
-    df_hashtags: pd.DataFrame = None,
     df_cadence: pd.DataFrame = None,
 ) -> list:
     """
     ★各種統計を総合し、ルールベースで日本語の箇条書きアドバイスを生成する（AI不使用）。
     df_media は「今効く型」を見るため直近期間に絞ったもの（build_summary が recent_window で渡す）。
     df_cadence は投稿ペース判定用の全期間データ（省略時は df_media）。
-    競合データは選定根拠が弱く参考程度のため、助言には使わない（引数は互換のため残す）。
     各助言は数値根拠付き。返り値は文字列のリスト。
     """
-    if df_competitors is None:
-        df_competitors = pd.DataFrame()
-    if df_hashtags is None:
-        df_hashtags = pd.DataFrame()
     if df_media.empty:
         return ["データがまだ少ないため、まずは投稿を続けてデータを貯めましょう。"]
 
@@ -728,18 +653,12 @@ def this_week_actions(df_media: pd.DataFrame, now: pd.Timestamp | None = None) -
 
 def build_summary(
     df_media: pd.DataFrame,
-    df_competitors: pd.DataFrame = None,
-    df_hashtags: pd.DataFrame = None,
     recent_months: int | None = RECENT_MONTHS,
 ) -> dict:
     """
     上記の統計をまとめて1つの辞書にする。dashboard表示・AIプロンプト両用。
     型・タイミング・タグ等の分析は直近 recent_months ヶ月に絞る（None で全期間）。
     """
-    if df_competitors is None:
-        df_competitors = pd.DataFrame()
-    if df_hashtags is None:
-        df_hashtags = pd.DataFrame()
     # 保存率の地合いは年々大きく変わる（2020→2026で約60倍低下）ため、型の分析は直近期間に絞る。
     # 投稿ペースだけは全期間 df で今日基準に判定する。
     df_recent = recent_window(df_media, recent_months)
@@ -747,14 +666,12 @@ def build_summary(
         "best_slots": best_posting_slots(df_recent),
         "best_types": best_media_type(df_recent),
         "top_hashtags": top_hashtags_by_engagement(df_recent),
-        "trending_topics": trending_topics(df_competitors, df_hashtags),
         "caption_length": caption_length_analysis(df_recent),
         "hashtag_count": hashtag_count_analysis(df_recent),
         "cadence": posting_cadence(df_media),
         "low_performers": low_performers(df_recent),
-        "competitor_gap": competitor_gap(df_recent, df_competitors),
         "visual": visual_engagement_analysis(df_recent),
-        "advice": actionable_advice(df_recent, df_competitors, df_hashtags, df_cadence=df_media),
+        "advice": actionable_advice(df_recent, df_cadence=df_media),
         "total_posts": int(len(df_media)),
         "metric_label": engagement_label(df_recent),
         "window_months": recent_months,

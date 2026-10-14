@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Instagram投稿データ収集・分析ツール。Facebook Graph API の Business Discovery API を使って、指定したInstagramアカウントのプロフィール情報・投稿データをCSVに保存する。さらに競合アカウント・ハッシュタグ人気投稿のトレンドを集め、統計ベースのルールで「次にやるべきこと」を提案する（AI投稿案機能は2026-10に削除）。
+Instagram投稿データ収集・分析ツール。Facebook Graph API の Business Discovery API を使って、指定したInstagramアカウントのプロフィール情報・投稿データをCSVに保存し、統計ベースのルールで「次にやるべきこと」を提案する（AI投稿案機能・競合／ハッシュタグ収集は2026-10に削除）。
 
 **重要：`ACCESS_TOKEN`／`IG_USER_ID` は妻のアカウント本体のトークン。** Business Discovery ではいいね・コメントしか取れないが、本体トークンならインサイト系エンドポイント（`/{media-id}/insights`、`/{ig-user-id}/insights`）を直接叩けるため、リーチ・保存・シェア・プロフィールアクセス・リンククリックも取得できる（`collect_insights.py`）。
 
@@ -17,8 +17,6 @@ Instagram投稿データ収集・分析ツール。Facebook Graph API の Busine
 │   ├── collect.py             # データ収集スクリプト（メイン。collect_account()を共有）
 │   ├── collect_insights.py    # インサイト収集（リーチ・保存・シェア・プロフィールアクセス等）
 │   ├── collect_visual.py      # 投稿画像の軽量視覚特徴収集（色・明るさ・余白・描き込み量等。API課金なし）
-│   ├── collect_competitors.py # 競合アカウント収集（collect.pyの関数を再利用）
-│   ├── collect_hashtags.py    # ハッシュタグ人気投稿収集（IG Hashtag Search）
 │   ├── collect_utils.py       # collect系共通ユーティリティ（env読み込み・api_get・ensure_dir）
 │   ├── data_loader.py         # CSV読み込み・データ変換ロジック
 │   ├── insights.py            # 統計ベースの「伸びる条件」抽出（純関数）
@@ -48,10 +46,6 @@ ACCESS_TOKEN=...                    # Facebook Graph API アクセストーク�
 VERSION=v22.0                       # Graph API バージョン
 IG_USER_ID=...                      # 自分のInstagramビジネスアカウントのID
 TARGET_USER_ID=...                  # 分析対象（妻）のInstagramユーザー名
-
-# --- トレンド収集で使用 ---
-COMPETITOR_USERNAMES=acc1,acc2      # 競合アカウント（カンマ区切り）
-TREND_HASHTAGS=水彩画,イラスト,アート  # トレンド収集タグ（カンマ区切り。5〜10個推奨）
 ```
 
 ## 実行
@@ -61,8 +55,6 @@ TREND_HASHTAGS=水彩画,イラスト,アート  # トレンド収集タグ（�
 python src/collect.py              # 妻アカウントの収集
 python src/collect_insights.py     # インサイト収集（直近200件。--all で全件、--limit Nで件数指定、--no-breakdown でフォロワー外リーチ分解を省略）
 python src/collect_visual.py       # 投稿画像の視覚特徴収集（直近200件のうち未処理。--all で全件、--limit Nで件数指定、--force で再計算）
-python src/collect_competitors.py  # 競合アカウントの収集
-python src/collect_hashtags.py     # ハッシュタグ人気投稿の収集
 python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--dry-run なしで LINE 送信）
 ```
 
@@ -73,8 +65,6 @@ python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--d
   **注: `reach_follower`／`reach_non_follower` の列はあるが常に空。メディア単位の follower_type 分解は v22.0 で非対応（`#100 Incompatible breakdowns`）。フォロワー外リーチはアカウント日次インサイトでのみ取得できる。**
 - `insights/{IG_USER_ID}_account_insights_{today}.csv` — アカウント日次インサイト（profile_views/website_clicks/reach/accounts_engaged/**reach_follower/reach_non_follower**）
 - `visual/{TARGET_USER_ID}_visual_{today}.csv` — 投稿ID別の視覚特徴（brightness/saturation/contrast/colorfulness/warm_ratio/**dominant_color**/whitespace_ratio/edge_density/palette_size/sharpness）。画像ファイルは保存せず数値特徴のみキャッシュ
-- `competitors/{username}-profile-{today}.csv` / `competitors/{username}_{today}.csv` — 競合のプロフィール・投稿
-- `hashtags/{tag}_{today}.csv` — タグ別の人気投稿（top_media）
 
 ## アーキテクチャ
 
@@ -84,7 +74,7 @@ python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--d
 2. `get_after_key()` — レスポンスからカーソルを取得
 3. `pagenate()` — after_keyがあれば追加リクエストで残り全件取得（上限1000件）
 4. `make_df()` — リスト形式のメディアデータをDataFrameに変換。VIDEO投稿は `thumbnail_url` を使用。
-5. `collect_account()` — 上記をまとめた1アカウント分の収集処理。after_key が無くなるまでページ送りを繰り返し、`id` で重複除去する（以前は1回だけで上限1025件・先頭25件が重複していた）。`collect.py` 本体と `collect_competitors.py` が共有する。
+5. `collect_account()` — 上記をまとめた1アカウント分の収集処理。after_key が無くなるまでページ送りを繰り返し、`id` で重複除去する（以前は1回だけで上限1025件・先頭25件が重複していた）。`collect.py` 本体から呼ぶ。
 
 ### インサイト収集（`src/collect_insights.py`）
 
@@ -120,27 +110,19 @@ python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--d
 - **IG の CDN URL は期限切れで取得不能**になるため、取れるうちに蓄積する設計（取得失敗は欠損のままスキップ）。
   デフォルトは直近200件のうち未処理のみ。`--all`／`--limit N`／`--sleep` あり。
 
-### トレンド収集
-
-- `collect_competitors.py` — `COMPETITOR_USERNAMES` の各アカウントを `collect_account()` で収集。
-- `collect_hashtags.py` — `ig_hashtag_search` でタグIDを取得し、`{hashtag_id}/top_media` で人気投稿を取得。
-  **API制限: 1アカウントにつき7日間で30ユニークタグまで／毎時200リクエストまで。** タグ数は絞り、cronは週1〜2回に抑える。
-
 ### 投稿提案（`src/insights.py`）
 
 - `insights.py` — 統計ベースの純関数群（AI不使用・無料）。
   `best_posting_slots()`（最適な曜日×時間）・`best_media_type()`・`top_hashtags_by_engagement()`・
-  `trending_topics()`（競合/タグから集計）・`caption_length_analysis()`（最適なキャプション長）・
+  `caption_length_analysis()`（最適なキャプション長）・
   `hashtag_count_analysis()`（最適なタグ個数。0個推奨は避ける`best_actionable_band`を提供）・
   `posting_cadence()`（投稿ペース。**基準は今日**。直近30日 vs 前90日、`days_since_last`。`STALL_DAYS`=14日以上空くと「停滞」）・`low_performers()`（避けたい条件）・
-  `competitor_gap()`（競合が多用＆未使用のタグ／エンゲージ比較）・
   `visual_engagement_analysis()`（★視覚特徴×エンゲージ。指標は**調整保存率 `saved_rate_adj` 優先**→生保存率→ER→いいねにフォールバック。
   連続特徴は5分位（最低/低/中/高/最高）の帯別平均、`dominant_color` はカテゴリ別平均をランキング。`_quantile_engagement()`・
   `_visual_engagement_col()` を使用。視覚特徴が無ければ空dict）・
   `actionable_advice()`（★上記を総合したルールベースの日本語「次にやるべきこと」助言。**投稿ペースの停滞・低下を最優先**、
   次にインサイトがある場合は保存率を上げる施策・リールでフォロワー外リーチを稼ぐ（直近でリールが強い場合のみ）・
-  プロフィール販売導線の整備（訪問数は中央値。バズ1件で平均が歪むため）を提示。視覚特徴がある場合は「どんな見た目の作品が刺さるか」も助言。
-  **競合由来の助言は出さない**（競合選定が参考程度のため））・
+  プロフィール販売導線の整備（訪問数は中央値。バズ1件で平均が歪むため）を提示。視覚特徴がある場合は「どんな見た目の作品が刺さるか」も助言。）・
   `this_week_actions()`（月間4週サイクル `MONTHLY_CYCLE` での今週のテーマ＋停滞・カレンダー待受の出し忘れ注意。週次レポートとホームで共用）・
   `build_summary()`（一括）。**型の分析は `recent_window()` で直近12ヶ月（`RECENT_MONTHS`）に絞り `saved_rate_adj` を再計算**してから行う
   （保存率の地合いが年々大きく下がっているため）。投稿ペースだけ全期間で判定。
@@ -227,7 +209,7 @@ CSSは `data-testid` セレクタ依存のため、Streamlitバージョンア�
 
 `build_summary` で算出（型の分析は直近12ヶ月・投稿ペースは全期間で今日基準）。根拠の期間・件数と指標名をキャプションに表示。
 - **📋 次にやるべきこと** — `actionable_advice()` の先頭3件を常時表示、残りは「もっと見る」expander
-- **📌 伸びる条件**（expander）— 最適タイミング・伸びるタイプ・効くタグ・業界トレンド
+- **📌 伸びる条件**（expander）— 最適タイミング・伸びるタイプ・効くタグ
 - **📐 伸びる投稿の型**（expander）— キャプション長・タグ数・投稿ペースとグラフ
 - **⚠️ 避けたい条件**（expander）— 反応が低かったパターン
 
@@ -242,8 +224,6 @@ CSSは `data-testid` セレクタ依存のため、Streamlitバージョンア�
 - `merge_visual()` — メディアデータに `id` で視覚特徴列（brightness等の数値9種＋`dominant_color`）を結合。未取得は欠損のまま
 - `add_saved_rate_adj()` — **渡された df の範囲で** m（リーチ加重保存率）・C（reach平均）を計算し `saved_rate_adj` を（再）算出。期間で絞った部分集合に対して呼ぶと**その期間の地合いで再正規化**される（保存率の地合いは年々約60倍下がっており、全期間で比べると昔の投稿が上位を独占して「今効く型」が見えなくなるため、ダッシュボードは直近Nヶ月に絞って本関数を呼び直す）
 - `merge_insights()` — メディアデータに `id` でインサイト列を結合。保存率 `saved_rate`・**ベイズ調整保存率 `saved_rate_adj`**（低リーチ補正。`(saved + m*C)/(reach + C)`。m=全体のリーチ加重保存率、C=reach平均。reach分布が古い極小投稿で右に歪むため中央値ではなく平均を採用。リーチが小さい投稿の保存率を全体平均へ引き寄せ、まぐれの高保存率を抑える）・リーチベースのエンゲージ率 `reach_engagement_rate`・フォロワー外リーチ比率 `non_follower_reach_rate`（`reach_non_follower`／`reach`）・総エンゲージ率 `total_engagement_rate`（`total_interactions`＝いいね＋コメント＋保存＋シェア ÷ 投稿時点フォロワー。`total_interactions` が無い投稿は基本ERにフォールバック）を算出
-- `load_competitor_data()` — `result/competitors/` の各競合の最新メディアCSVを結合（`competitor`列付き）
-- `load_hashtag_data()` — `result/hashtags/` の各タグの最新CSVを結合（`search_hashtag`列付き）
 
 ## リモコン（スマホから操作）
 
@@ -277,8 +257,6 @@ restart で直らなければ認証切れ（`~/.claude/.credentials.json` を VS
 ## 注意事項
 
 - API制限（error code 4）に引っかかった場合は1時間後に再実行する
-- ハッシュタグ収集は「7日間で30ユニークタグまで」。`TREND_HASHTAGS` は絞り、頻度を抑える
-- ハッシュタグの top_media では投稿者のフォロワー数・ユーザー名は取得できない（いいね/コメント/キャプション/タイプは取得可）
 - `result/` と `.env` は `.gitignore` で除外済み
 - ダッシュボードのサムネイルはInstagramのCDN URLのため、古い投稿は表示されない場合がある（有効期限あり）
 - エンゲージメント率 = (いいね数 + コメント数) / 投稿日時点のフォロワー数 × 100（基本ER。`engagement_rate`。散布図やbest_slots等の全期間比較に使用）。

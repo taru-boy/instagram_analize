@@ -10,8 +10,7 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_loader import (DAY_JA, add_saved_rate_adj,
-                         load_account_insights_data, load_competitor_data,
-                         load_hashtag_data, load_merged_media)
+                         load_account_insights_data, load_merged_media)
 from insights import (MEDIA_TYPE_JA, build_summary, this_week_actions,
                       visual_engagement_analysis)
 
@@ -188,12 +187,10 @@ header[data-testid="stHeader"] { display: none; }
 def load_all_data():
     df_profile, df_media = load_merged_media(RESULT_DIR)
     df_account_insights = load_account_insights_data(RESULT_DIR)
-    df_competitors = load_competitor_data(RESULT_DIR)
-    df_hashtags = load_hashtag_data(RESULT_DIR)
-    return df_profile, df_media, df_competitors, df_hashtags, df_account_insights
+    return df_profile, df_media, df_account_insights
 
 
-df_profile, df_media, df_competitors, df_hashtags, df_account_insights = load_all_data()
+df_profile, df_media, df_account_insights = load_all_data()
 
 HAS_INSIGHTS = (
     not df_media.empty
@@ -472,7 +469,7 @@ if not df_profile.empty:
         gain_prev = f_30 - f_60
 
 # 投稿提案サマリ（型の分析は直近12ヶ月・投稿ペースは全期間で今日基準）
-summary = build_summary(df_media, df_competitors, df_hashtags)
+summary = build_summary(df_media)
 IDEA_METRIC = summary.get("metric_label", "反応")
 IDEA_WINDOW = (
     f"直近{summary['window_months']}ヶ月の投稿 {summary['window_posts']}件"
@@ -1156,15 +1153,6 @@ with tab_idea:
                 st.caption(tags)
             else:
                 st.metric("🔖 効くハッシュタグ", "—")
-
-        if summary["trending_topics"]:
-            trend_tags = "　".join(f"#{t['hashtag']}" for t in summary["trending_topics"][:10])
-            st.markdown(f"**🌐 業界トレンド（競合・人気タグ投稿で多用）**\n\n{trend_tags}")
-        else:
-            st.caption(
-                "💡 競合・ハッシュタグのトレンドデータを集めると、より精度の高い提案ができます"
-                "（`python src/collect_competitors.py` / `python src/collect_hashtags.py`）"
-            )
 
     # --- 伸びる投稿の型 ---
     with st.expander("📐 伸びる投稿の「型」（キャプション長・タグ数・投稿ペース）"):

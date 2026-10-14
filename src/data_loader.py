@@ -36,48 +36,6 @@ def _combine_latest_by_id(pattern: str, numeric_cols: list) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True).groupby("id", as_index=False).last()
 
 
-def _load_latest_media_by_key(
-    dir_path: str,
-    key_col: str,
-    skip_profile: bool = False,
-) -> pd.DataFrame:
-    """ディレクトリ内の CSV を {key}_{date}.csv パターンで走査し、
-    key ごとに最新ファイルを選んで結合する。
-
-    load_competitor_data / load_hashtag_data の共通ロジックを集約。
-    """
-    files = sorted(glob.glob(os.path.join(dir_path, "*.csv")))
-    if skip_profile:
-        files = [f for f in files if "-profile-" not in os.path.basename(f)]
-    if not files:
-        return pd.DataFrame()
-
-    latest_by_key: dict = {}
-    for f in files:
-        name = os.path.basename(f)
-        m = re.match(r"(.+)_(\d{4}-\d{2}-\d{2})\.csv$", name)
-        if not m:
-            continue
-        key, date = m.group(1), m.group(2)
-        if key not in latest_by_key or date > latest_by_key[key][1]:
-            latest_by_key[key] = (f, date)
-
-    frames = []
-    for key, (f, _) in latest_by_key.items():
-        try:
-            df = pd.read_csv(f, index_col=0)
-            if df.empty:
-                continue
-            df = _normalize_media_df(df)
-            if key_col not in df.columns:
-                df[key_col] = key
-            frames.append(df)
-        except Exception:
-            continue
-
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-
 def load_profile_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     files = sorted(glob.glob(os.path.join(result_dir, "*-profile-*.csv")))
     rows = []
@@ -124,20 +82,6 @@ def _normalize_media_df(df: pd.DataFrame) -> pd.DataFrame:
     df["weekday"] = df["timestamp_jst"].dt.weekday
     df["day_name"] = df["weekday"].map(lambda x: DAY_JA[x])
     return df
-
-
-def load_competitor_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
-    """result/competitors/ 内の各競合の最新メディアCSVを読み込み、1つに結合して返す。"""
-    return _load_latest_media_by_key(
-        os.path.join(result_dir, "competitors"), "competitor", skip_profile=True
-    )
-
-
-def load_hashtag_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
-    """result/hashtags/ 内の各タグの最新CSVを読み込み、1つに結合して返す。"""
-    return _load_latest_media_by_key(
-        os.path.join(result_dir, "hashtags"), "search_hashtag"
-    )
 
 
 _INSIGHT_NUMERIC = [
