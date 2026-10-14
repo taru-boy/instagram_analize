@@ -157,7 +157,8 @@ def merge_visual(df_media: pd.DataFrame, df_visual: pd.DataFrame) -> pd.DataFram
 
 def load_account_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
     """
-    result/insights/ の全 *_account_insights_*.csv を読み込み、日次推移として返す。
+    result/insights/ のアカウント日次の累積CSV（*_account_daily.csv）を読み込み、日次推移として返す。
+    1行は Meta の日次枠（太平洋時間の1日＝日本時間16時〜翌16時）1日ぶん。夜の投稿は投稿日と同じ行に入る。
 
     Returns
     -------
@@ -165,7 +166,7 @@ def load_account_insights_data(result_dir: str = RESULT_DIR) -> pd.DataFrame:
         date, profile_views, website_clicks, reach, accounts_engaged の日次データ。
     """
     ins_dir = os.path.join(result_dir, "insights")
-    files = sorted(glob.glob(os.path.join(ins_dir, "*_account_insights_*.csv")))
+    files = sorted(glob.glob(os.path.join(ins_dir, "*_account_daily.csv")))
     if not files:
         return pd.DataFrame()
     frames = []

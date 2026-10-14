@@ -45,7 +45,6 @@ def build_report(now: pd.Timestamp | None = None) -> str:
     now = pd.Timestamp.now() if now is None else now
     today = now.normalize()
     week_start = today - pd.Timedelta(days=7)
-    prev_start = today - pd.Timedelta(days=14)
 
     df_profile, df_media = load_merged_media(RESULT_DIR)
     df_ai = load_account_insights_data(RESULT_DIR)
@@ -69,11 +68,14 @@ def build_report(now: pd.Timestamp | None = None) -> str:
 
     # --- アカウント全体（先週 vs 前の週）---
     if not df_ai.empty:
+        # アカウント日次は締まった日（2日前）までしか無いので、データの最終日から7日ずつで比べる
+        ai_end = min(df_ai["date"].max().normalize() + pd.Timedelta(days=1), today)
+        ai_start = ai_end - pd.Timedelta(days=7)
         lines.append("")
-        lines.append("■ アカウント全体（前の週比）")
+        lines.append(f"■ アカウント全体（{ai_start:%m/%d}〜{(ai_end - pd.Timedelta(days=1)):%m/%d}・前の週比）")
         for col, label in [("profile_views", "プロフィール訪問"), ("website_clicks", "ショップへのリンククリック")]:
-            cur = _sum_window(df_ai, col, week_start, today)
-            prev = _sum_window(df_ai, col, prev_start, week_start)
+            cur = _sum_window(df_ai, col, ai_start, ai_end)
+            prev = _sum_window(df_ai, col, ai_start - pd.Timedelta(days=7), ai_start)
             if cur is None:
                 continue
             diff = "" if prev is None else f"（{cur - prev:+,.0f}）"

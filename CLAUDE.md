@@ -55,6 +55,7 @@ TARGET_USER_ID=...                  # 分析対象（妻）のInstagramユーザ
 # プロジェクトルートから実行
 python src/collect.py              # 妻アカウントの収集
 python src/collect_insights.py     # インサイト収集（直近200件。--all で全件、--limit Nで件数指定、--no-breakdown でフォロワー外リーチ分解を省略）
+python src/collect_insights.py --account-only --account-backfill 730  # アカウント日次を過去2年ぶん取り直す（API の上限が2年）
 python src/collect_visual.py       # 投稿画像の視覚特徴収集（直近200件のうち未処理。--all で全件、--limit Nで件数指定、--force で再計算）
 python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--dry-run なしで LINE 送信）
 ```
@@ -64,7 +65,9 @@ python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--d
 - `{TARGET_USER_ID}_{today}.csv` — 投稿一覧（**id**・メディアURL・キャプション・ハッシュタグ・いいね数・コメント数・メディアタイプ）
 - `insights/{IG_USER_ID}_media_insights_{today}.csv` — 投稿ID別インサイト（reach/saved/shares/total_interactions/profile_visits/views）。
   **注: `reach_follower`／`reach_non_follower` の列はあるが常に空。メディア単位の follower_type 分解は v22.0 で非対応（`#100 Incompatible breakdowns`）。フォロワー外リーチはアカウント日次インサイトでのみ取得できる。**
-- `insights/{IG_USER_ID}_account_insights_{today}.csv` — アカウント日次インサイト（profile_views/website_clicks/reach/accounts_engaged/**reach_follower/reach_non_follower**）
+- `insights/{IG_USER_ID}_account_daily.csv` — アカウント日次インサイトの**累積ファイル1つ**（date/profile_views/website_clicks/reach/accounts_engaged/**reach_follower/reach_non_follower**）。
+  1行＝Meta の日次枠1日ぶん（太平洋時間の1日＝日本時間16時〜翌16時。夜の投稿は投稿日と同じ行に入る）。毎晩、締まった直近3日（今日−4〜今日−2）を取り直して `date` 単位で上書きする。
+  旧方式の `*_account_insights_{today}.csv`（〜2026-10-14）は2日ぶんが混ざった値だったため `insights/legacy_2day_window/` に退避済み（読まない）
 - `visual/{TARGET_USER_ID}_visual_{today}.csv` — 投稿ID別の視覚特徴（brightness/saturation/contrast/colorfulness/warm_ratio/**dominant_color**/whitespace_ratio/edge_density/palette_size/sharpness）。画像ファイルは保存せず数値特徴のみキャッシュ
 
 ## アーキテクチャ
@@ -91,9 +94,12 @@ python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--d
   **アカウントレベル（`/{ig-user-id}/insights`・`period=day` 必須）専用。メディア単位は v22.0 で非対応（`#100`）なので
   `fetch_media_insights` は breakdown を発行せず、`with_breakdown` 引数は実質no-op（媒体別 reach_non_follower は常に欠損）。**
   非対応・エラー時は None で握りつぶす。`--no-breakdown` でアカウント側の分解も省略可。
-- `fetch_account_insights()` — `/{IG_USER_ID}/insights?...&metric_type=total_value` でアカウント日次インサイト。
-  当日 reach の follower_type 分解（`period=day`）もマージする。**フォロワー外リーチが実際に貯まるのはここだけ**なので、
-  推移を見るには日次cron（`run.sh`）の継続が必須。
+- `fetch_account_insights(day)` — `/{IG_USER_ID}/insights?...&metric_type=total_value` で**指定した1日ぶん**のアカウントインサイト。
+  **`since/until` を必ず付ける**（`_day_range_param`。UTC 0時〜翌0時を渡すと太平洋時間のその日の枠が返る）。
+  付けないと Meta は「今の時刻にかかる2つの日次枠の和集合」を返す（旧方式の不具合。週次の合計が約2倍、日付も1日ずれていた）。
+  同じ日の reach の follower_type 分解もマージする。**フォロワー外リーチが実際に貯まるのはここだけ**。
+  API が出すのは直近2年まで（それより前は `#100`）なので、累積ファイルに貯め続けるために日次cron（`run.sh`）を継続する。
+  `upsert_account_daily()` で累積CSVに上書き。`--account-backfill N` で取り直す日数、`--account-only` でメディア別を省略。
 - レート制限対策：デフォルトは直近200件のみ。`--all` で全件、`--limit N` で件数指定、`--sleep` でウェイト調整。
   breakdown のリクエストはアカウント側の1回のみ（メディア1件あたりは常に1リクエスト）。
 
@@ -132,7 +138,7 @@ python src/weekly_report.py --dry-run  # 週次レポートの文面確認（--d
 
 ### 週次レポート・失敗通知（`src/weekly_report.py`・`run.sh`）
 
-- `weekly_report.py` — 直近7日の投稿（リーチ・保存）・アカウント全体（プロフィール訪問・リンククリック・フォロワー増減の前週比）・
+- `weekly_report.py` — 直近7日の投稿（リーチ・保存）・アカウント全体（プロフィール訪問・リンククリックはアカウント日次の最終日から7日ずつで前週比。フォロワー増減）・
   `this_week_actions()` の今週のテーマ・`actionable_advice()` の上位2件を短文にまとめ、journaling リポジトリの
   `scripts/send_line.sh` で LINE に送る（パスは環境変数 `SEND_LINE` で上書き可）。`--dry-run` で表示のみ。
   **cron には登録していない**。妻向けの機能なので、妻から要望があるまで自動送信はしない（登録するときは `journaling/docs/automation.md` の時刻表も直す。LINE 無料枠は月200通）。
@@ -176,7 +182,7 @@ CSSは `data-testid` セレクタ依存のため、Streamlitバージョンア�
 - **ホーム率（投稿時）** — `_account_home_rate_peak()`。`reach_follower ÷ その日のフォロワー数`の直近30日**最大値**
   （＝最もフォロワーに届いた投稿日の値）。**メディア単位のフォロワー別リーチはv22で取れない**ため、アカウント日次
   （`df_account_insights` の `reach_follower`）から算出する。日次は投稿日にスパイクし投稿のない日は残り火（数人）に
-  なるため平均ではなくピークを採用。アカウントインサイトの履歴が浅い間（cron開始前）は前30日が無く、デルタは「—」。
+  なるため平均ではなくピークを採用。フォロワー別の内訳は API が直近1年ぶんしか出さない（それより前は空欄）。
 - **集計方式** — 比率KPI（保存率・フォロワー外リーチ比率・エンゲージ率）は**リーチ加重 `sum(分子)/sum(リーチ)`**。
   件数KPI（リーチ・プロフィール訪問・シェア）は投稿あたり平均。ヘルパー: `_window_rate`・`_window_mean`・
   `_window_engagement_rate`・`_account_nf_rate`・`_account_home_rate_peak`・`_fmt_delta`。ホームKPIの保存率はリーチ加重のため低リーチ偏りは無い。
@@ -220,7 +226,7 @@ CSSは `data-testid` セレクタ依存のため、Streamlitバージョンア�
 - `load_media_data()` — 最新メディアCSVを読み込み（UTC→JSTに変換済み）
 - `merge_follower_at_post_date()` — 各投稿日のフォロワー数を紐付けてエンゲージメント率を計算
 - `load_insights_data()` — `result/insights/` の**全**メディア別インサイトCSVを統合し、`id` ごとに最新の非欠損値を採用（日次で直近N件のみ収集しても、過去 `--all` で取得した全履歴のカバレッジが失われない。`groupby.last()` を利用）
-- `load_account_insights_data()` — `result/insights/` の全アカウント別インサイトCSVを日次推移として結合
+- `load_account_insights_data()` — `result/insights/{IG_USER_ID}_account_daily.csv`（累積）を日次推移として読み込む。最新行は2日前（締まった日のみ）
 - `load_visual_data()` — `result/visual/` の**全**視覚特徴CSVを統合し、`id` ごとに最新の非欠損特徴を採用（`load_insights_data` と同じ `groupby.last()` 方針）
 - `merge_visual()` — メディアデータに `id` で視覚特徴列（brightness等の数値9種＋`dominant_color`）を結合。未取得は欠損のまま
 - `add_saved_rate_adj()` — **渡された df の範囲で** m（リーチ加重保存率）・C（reach平均）を計算し `saved_rate_adj` を（再）算出。期間で絞った部分集合に対して呼ぶと**その期間の地合いで再正規化**される（保存率の地合いは年々約60倍下がっており、全期間で比べると昔の投稿が上位を独占して「今効く型」が見えなくなるため、ダッシュボードは直近Nヶ月に絞って本関数を呼び直す）
@@ -265,7 +271,7 @@ restart で直らなければ認証切れ（`~/.claude/.credentials.json` を VS
 - インサイトとメディアCSVは `id` で結合する。`id` 列はある時点から追加されたため、それ以前のメディアCSVには `id` が無くインサイトを結合できない（`collect.py` を再実行すれば最新CSVに `id` が付与される）
 - `profile_visits`（投稿経由のプロフィール訪問）と `profile_views`（アカウント全体のプロフィールアクセス）は別物。
   `profile_visits` はリールでは取得できない（v22 で `#100`）。動画の導線効果は投稿日のアカウント日次 `profile_views` で見る
-- アカウントインサイトは `period=day`（当日分のみ）。推移を見るには日次cron（`run.sh`）で毎日蓄積する
+- アカウントインサイトは `period=day` に `since/until` で1日を指定して取る。API は直近2年までしか出さないので、日次cron（`run.sh`）で累積ファイルに貯め続ける
 - インサイトAPIにもレート制限（毎時200リクエスト）あり。`collect_insights.py` はデフォルトで直近200件のみ取得する
 - APIバージョンは v22.0。欲しいインサイト指標は v22 ですべて取得可能（バージョンアップは任意）。`impressions` と非Reelsの `video_views` は2025年に廃止済み（それぞれ `reach`・`views` で代替）
 - 視覚特徴（`collect_visual.py`）は**ローカル軽量分析**のみで、モチーフ（何が描かれているか）は判定できない（色み・明るさ・余白・描き込み量などの物理量）。意味的な分析が必要になったら Claude Vision（少額課金）への拡張を検討する

@@ -15,19 +15,16 @@
 
 販売・受注に直結する課題は今は無い。上から順に、放置したときの困り具合が大きい。
 
-1. **アカウント日次の日付が1日ずれている**: `collect_insights.py` は0時に実行して `date` に収集日を入れるが、中身はほぼ前日ぶん。
-   ダッシュボードのトレンドタブや週次レポートで、投稿日と効果の日がずれて見える。保存時か表示時に1日戻すか検討する（既存CSVとの整合に注意）。
-   次回の抽選で今回とクリック推移を比べる前に直しておきたい。
-2. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
+1. **テストが無い**: `posting_cadence`・`add_saved_rate_adj`・`collect.make_df` に最小限の pytest を置く。
    助言ロジックの手直しで数字が黙って変わるのを防ぐ。
-3. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
+2. **insta 用リモコンの見張りが無い**: cron に `RC_UNIT=claude-rc-insta.service` 付きで
    `~/Desktop/journaling/scripts/rc_healthcheck.sh` を1行足す（今の cron は journaling 用の1行のみ。`journaling/docs/automation.md` の時刻表も直す）。
-4. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
+3. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
 
 ## 保留・待ち
 
 - **次回の抽選販売の検証**: [lottery_review_2026-07.md](lottery_review_2026-07.md) の「次回の告知の型」（開始の静止画＋作品動画をまとめて固定）で出したら、
-  今回のリンククリック推移（告知翌日131→53→22…）と比べて、メモに結果を足す。妻には共有済みで好評（2026-10-14）。
+  今回のリンククリック推移（告知当日108→44→12…）と比べて、メモに結果を足す。妻には共有済みで好評（2026-10-14）。
 
 - **週次LINEレポート**: 妻向けの機能なので、妻から要望があるまで cron に登録しない（送信できることは 2026-10-14 に確認済み）。
 - **収集失敗の通知**: 本番経路（0時にキューへ積み、朝6:30にまとめて配信）は、実際に失敗したときに確かめる。
@@ -44,3 +41,4 @@
 - 抽選販売（2026-07）の振り返り: [lottery_review_2026-07.md](lottery_review_2026-07.md)。告知は静止画1本が主役。動画は絵の感じを伝える役として開始直後にまとめて出す。妻向けの要約を共有済み
 - 競合・ハッシュタグ収集を削除（選定根拠が弱く参考程度のため）。`result/competitors/`・`result/hashtags/` の過去データはローカルに残っている
 - Streamlit の非推奨引数 `use_container_width` を `width="stretch"` に置き換え、`requirements.txt` を動作中の版に固定（未記載だった `numpy` も追加）
+- アカウント日次: 2日ぶんが混ざって日付もずれていたのを、1日ずつ取る方式に直した。過去2年ぶん（2024-10-15〜）を取り直し、抽選振り返りの数字も更新

@@ -8,6 +8,7 @@ collect.py が使う Business Discovery API は like/comment しか返さない�
 
 - メディア別インサイト : GET /{media-id}/insights?metric=reach,saved,shares,...
 - アカウント別インサイト: GET /{ig-user-id}/insights?metric=profile_views,website_clicks,...&metric_type=total_value
+                          &since=<その日0時UTC>&until=<翌日0時UTC>（1日ぶん）
 
 .env は collect.py と共通（ACCESS_TOKEN / VERSION / IG_USER_ID）。新しい環境変数は不要。
 
@@ -22,12 +23,14 @@ collect.py が使う Business Discovery API は like/comment しか返さない�
     python src/collect_insights.py --limit 50 # 直近 50 件だけ（レート制限対策）
     python src/collect_insights.py --all      # 全メディアを収集（963件あると時間がかかる）
     python src/collect_insights.py --no-breakdown  # フォロワー外リーチの分解を取らない（リクエスト半減）
+    python src/collect_insights.py --account-only --account-backfill 730  # アカウント日次を過去2年ぶん取り直す
 """
 
 import argparse
 import os
 import sys
 import time
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -48,6 +51,12 @@ CORE_METRICS = ["reach", "saved", "shares"]
 
 # アカウント全体の日次インサイト
 ACCOUNT_METRICS = ["profile_views", "website_clicks", "reach", "accounts_engaged"]
+ACCOUNT_COLUMNS = ["date", *ACCOUNT_METRICS, "reach_follower", "reach_non_follower"]
+
+# 毎晩取り直すアカウント日次の日数。日次枠は太平洋時間の1日（日本時間16時〜翌16時）で、
+# 0時の実行時点では前日の枠がまだ開いている。締まった直近の日（今日−2）から遡って取り直し、
+# Meta 側の集計の遅れも吸収する。
+ACCOUNT_REFRESH_DAYS = 3
 
 # 投稿別インサイトCSVの列順
 MEDIA_INSIGHT_COLUMNS = [
@@ -75,6 +84,14 @@ def main():
         action="store_true",
         help="フォロワー外リーチ（reach の follower_type 分解）を取得しない。リクエスト数を半減できる。",
     )
+    parser.add_argument(
+        "--account-backfill",
+        type=int,
+        default=ACCOUNT_REFRESH_DAYS,
+        metavar="N",
+        help=f"アカウント日次を締まった直近N日ぶん取り直す（デフォルト{ACCOUNT_REFRESH_DAYS}。API は直近2年まで）",
+    )
+    parser.add_argument("--account-only", action="store_true", help="メディア別を取らず、アカウント日次だけ収集する")
     args = parser.parse_args()
 
     env = load_env()
@@ -92,7 +109,36 @@ def main():
 
     limit = None if args.all else args.limit
 
-    # --- メディア別インサイト ---
+    if not args.account_only:
+        collect_media_insights(version, ig_user_id, access_token, out_dir, today, limit, args)
+
+    # --- アカウント別インサイト（1日ぶんずつ。累積ファイルに上書き）---
+    latest = date.today() - timedelta(days=2)
+    days = [latest - timedelta(days=i) for i in range(args.account_backfill)]
+    account_rows = []
+    for i, day in enumerate(days, 1):
+        row = fetch_account_insights(
+            version, ig_user_id, access_token, day, with_breakdown=not args.no_breakdown
+        )
+        if not row:
+            # 2年より前は #100 で取れない。backfill はそこで打ち切る
+            break
+        account_rows.append(row)
+        if i % 50 == 0:
+            print(f"  アカウント日次 {i}/{len(days)} 日取得…")
+        time.sleep(args.sleep)
+    if not account_rows:
+        print("アカウント別インサイトの取得に失敗しました。")
+        sys.exit(1)
+    account_path = os.path.join(out_dir, f"{ig_user_id}_account_daily.csv")
+    upsert_account_daily(account_path, account_rows)
+    print(f"アカウント日次を保存: {account_path}（{account_rows[-1]['date']}〜{account_rows[0]['date']}の{len(account_rows)}日）")
+
+    print("インサイト収集が完了しました。")
+
+
+def collect_media_insights(version, ig_user_id, access_token, out_dir, today, limit, args) -> None:
+    """直近 limit 件（None なら全件）のメディア別インサイトを取得し、日付付きCSVに保存する。"""
     media_list = fetch_media_list(version, ig_user_id, access_token, limit, args.sleep)
     print(f"対象メディア: {len(media_list)} 件")
     if not media_list:
@@ -129,22 +175,6 @@ def main():
     media_path = os.path.join(out_dir, f"{ig_user_id}_media_insights_{today}.csv")
     df_media.to_csv(media_path, index=False)
     print(f"メディア別インサイトを保存: {media_path}")
-
-    # --- アカウント別インサイト ---
-    account_rows = fetch_account_insights(
-        version, ig_user_id, access_token, with_breakdown=not args.no_breakdown
-    )
-    if account_rows:
-        df_account = pd.DataFrame([account_rows])
-        df_account.insert(0, "date", today)
-        account_path = os.path.join(out_dir, f"{ig_user_id}_account_insights_{today}.csv")
-        df_account.to_csv(account_path, index=False)
-        print(f"アカウント別インサイトを保存: {account_path}")
-    else:
-        print("アカウント別インサイトの取得に失敗しました。")
-        sys.exit(1)
-
-    print("インサイト収集が完了しました。")
 
 
 def fetch_media_list(
@@ -214,11 +244,12 @@ def fetch_media_insights(
 
 
 def _request_reach_breakdown(
-    version: str, node: str, access_token: str, period: str | None = None
+    version: str, node: str, access_token: str, period: str | None = None, range_param: str = ""
 ) -> dict | None:
     """
     reach を follow_type（FOLLOWER / NON_FOLLOWER）で分解して取得する。
     アカウントレベル（{ig-user-id}/insights）専用。period=day 必須。
+    API が分解を出すのは直近1年ぶんだけ（それより前の日は結果が空になる）。
     非対応・エラー時は None を返す。
 
     Returns
@@ -229,7 +260,7 @@ def _request_reach_breakdown(
     period_param = f"&period={period}" if period else ""
     url = (
         f"https://graph.facebook.com/{version}/{node}"
-        f"?metric=reach&breakdown=follow_type&metric_type=total_value{period_param}"
+        f"?metric=reach&breakdown=follow_type&metric_type=total_value{period_param}{range_param}"
         f"&access_token={access_token}"
     )
     data = api_get(url)
@@ -248,6 +279,10 @@ def _request_reach_breakdown(
                     out["reach_follower"] = res.get("value")
                 elif dims[0] == "NON_FOLLOWER":
                     out["reach_non_follower"] = res.get("value")
+    if out:
+        # 0 の側は結果から省かれる（全員フォロワー外だった日など）ので 0 で埋める
+        out.setdefault("reach_follower", 0)
+        out.setdefault("reach_non_follower", 0)
     return out or None
 
 
@@ -274,36 +309,64 @@ def _request_media_insights(
     return out
 
 
+def _day_range_param(day: date) -> str:
+    """その日1日ぶん（UTC 0時〜翌0時）の since/until。
+
+    since/until を付けないと、Meta は今の時刻にかかる2つの日次枠をまとめた値を返す
+    （ユニーク数なので2日の和集合。2026-10-14 に確認）。必ず1日を指定する。
+    指定した日は太平洋時間の1日（日本時間16時〜翌16時）の枠として返る。
+    """
+    start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    until = start + timedelta(days=1)
+    return f"&since={int(start.timestamp())}&until={int(until.timestamp())}"
+
+
 def fetch_account_insights(
-    version: str, ig_user_id: str, access_token: str, with_breakdown: bool = True
+    version: str, ig_user_id: str, access_token: str, day: date, with_breakdown: bool = True
 ) -> dict:
     """
-    アカウント全体の日次インサイト（profile_views/website_clicks/reach/accounts_engaged）を取得。
+    アカウント全体の、指定した1日ぶんのインサイト
+    （profile_views/website_clicks/reach/accounts_engaged）を取得する。
     metric_type=total_value が必須。
-    with_breakdown=True のときは当日 reach の follower_type 分解
+    with_breakdown=True のときは同じ日の reach の follower_type 分解
     （reach_follower / reach_non_follower）も追加リクエストで取得してマージする。
+    取得できなければ空の dict を返す（API は直近2年より前を #100 で拒否する）。
     """
     metric_str = ",".join(ACCOUNT_METRICS)
+    range_param = _day_range_param(day)
     url = (
         f"https://graph.facebook.com/{version}/{ig_user_id}/insights"
-        f"?metric={metric_str}&period=day&metric_type=total_value&access_token={access_token}"
+        f"?metric={metric_str}&period=day&metric_type=total_value{range_param}"
+        f"&access_token={access_token}"
     )
     data = api_get(url)
     if "error" in data:
-        print(f"アカウントインサイトの取得でエラー: {data['error']}")
+        print(f"アカウントインサイト（{day}）の取得でエラー: {data['error']}")
         return {}
-    out = {}
+    out = {"date": day.isoformat()}
     for item in data.get("data", []):
         name = item.get("name")
         total = item.get("total_value", {})
         out[name] = total.get("value")
     if with_breakdown:
         breakdown = _request_reach_breakdown(
-            version, f"{ig_user_id}/insights", access_token, period="day"
+            version, f"{ig_user_id}/insights", access_token, period="day", range_param=range_param
         )
         if breakdown:
             out.update(breakdown)
     return out
+
+
+def upsert_account_daily(path: str, rows: list[dict]) -> None:
+    """アカウント日次の累積CSVに rows を date 単位で上書き（無い日は追加）して保存する。"""
+    new = pd.DataFrame(rows)
+    if os.path.exists(path):
+        old = pd.read_csv(path)
+        new = pd.concat([old[~old["date"].isin(new["date"])], new], ignore_index=True)
+    for col in ACCOUNT_COLUMNS:
+        if col not in new.columns:
+            new[col] = None
+    new[ACCOUNT_COLUMNS].sort_values("date").to_csv(path, index=False)
 
 
 if __name__ == "__main__":
