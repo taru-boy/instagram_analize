@@ -15,10 +15,7 @@
 
 販売・受注に直結する課題は今は無い。上から順に、放置したときの困り具合が大きい。
 
-1. **トレンドタブのアカウント日次グラフが2年ぶんになった**: 取り直しで728日ぶんになり、日ごとの点付き折れ線（`markers=True`）がスマホで潰れる。
-   `dashboard.py` の「🔗 アカウント日次インサイトの推移」を、既定は直近90日にするか週ごとの合計に変える（`PERIOD_OPTIONS`／`_period_window` が流用できる）。
-   キャプション「日次cronで毎日 `run.sh` を実行すると蓄積されていきます」も、過去2年は取り直し済みである旨に直す。
-2. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
+1. **README が古い**: `collect.py` しか載っておらず、`pip install` も3パッケージだけ。CLAUDE.md と `requirements.txt` へ誘導する形にする。
 
 ## 保留・待ち
 
@@ -44,3 +41,4 @@
 - テストを追加（`tests/`・`pytest -q`）: `posting_cadence`・`add_saved_rate_adj`・`make_df`・`upsert_account_daily`・`save_media_insights`・`_day_range_param`
 - ハッシュタグの正規表現を raw 文字列に。`collect_visual.py` の同日結合が読めないときに黙って上書きしていたのを、例外で止めるように
 - insta 用リモコンに見張りを追加（cron :10・:40。journaling 側の `rc_healthcheck.sh` を共有し、通知に unit 名を入れた）
+- トレンドタブのアカウント日次グラフに期間セレクタ（既定は直近3ヶ月。点は100日ぶんまで）を付け、キャプションを取り直し済みの説明に直した

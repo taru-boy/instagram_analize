@@ -291,13 +291,13 @@ def _period_window(df, months):
     return df[df["timestamp_jst"] >= cutoff]
 
 
-def _select_period(key: str, label: str = "対象期間", help_text: str | None = None):
-    """PERIOD_OPTIONS に基づく期間セレクタ。既定は直近12ヶ月。"""
+def _select_period(key: str, label: str = "対象期間", help_text: str | None = None, default=12):
+    """PERIOD_OPTIONS に基づく期間セレクタ。既定は直近12ヶ月（default に月数か None を渡して変える）。"""
     return st.selectbox(
         label,
         options=list(PERIOD_OPTIONS.keys()),
         format_func=lambda x: PERIOD_OPTIONS[x],
-        index=2,
+        index=list(PERIOD_OPTIONS.keys()).index(default),
         key=key,
         help=help_text,
     )
@@ -787,7 +787,12 @@ with tab_trend:
     if not df_account_insights.empty:
         ai_cols = [c for c in ["profile_views", "reach", "website_clicks"] if c in df_account_insights.columns]
         if ai_cols:
+            # 過去2年ぶんあるので、日ごとの線がスマホで潰れないよう既定は直近3ヶ月
+            ai_months = _select_period("account_daily_period", default=3)
             df_ai_sorted = df_account_insights.sort_values("date")
+            if ai_months is not None:
+                cutoff = pd.Timestamp.now() - pd.DateOffset(months=ai_months)
+                df_ai_sorted = df_ai_sorted[df_ai_sorted["date"] >= cutoff]
             label_map = {"profile_views": "プロフィールアクセス", "reach": "リーチ", "website_clicks": "リンククリック"}
             col_names = {c: label_map.get(c, c) for c in ai_cols}
             df_ai_plot = df_ai_sorted[["date"] + ai_cols].rename(columns=col_names)
@@ -798,11 +803,15 @@ with tab_trend:
                 y="値",
                 color="指標",
                 labels={"date": "日付", "値": "件数"},
-                markers=True,
+                # 点を打つのは3ヶ月ぶんまで。それより長いと点が重なって線が読めない
+                markers=len(df_ai_sorted) <= 100,
             )
             fig_ai.update_layout(hovermode="x unified")
             st.plotly_chart(fig_ai, width="stretch")
-            st.caption("日次cronで毎日 `run.sh` を実行すると蓄積されていきます。")
+            st.caption(
+                "1日＝日本時間16時〜翌16時の枠（夜の投稿は投稿日の値に入ります）。"
+                "過去2年ぶん（2024-10-15〜）は取り直し済みで、以降は毎晩の `run.sh` で2日前までが足されます。"
+            )
         else:
             st.info("日次インサイト列が見つかりません")
     else:
